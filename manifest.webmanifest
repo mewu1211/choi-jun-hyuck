@@ -1,0 +1,16 @@
+{
+  "id": "./index.html",
+  "name": "시대연결 · 한국사 5일 마스터",
+  "short_name": "시대연결",
+  "description": "비상교육 한국사2 시험범위 연표·암기카드·모의고사",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1320",
+  "theme_color": "#0b1320",
+  "lang": "ko-KR",
+  "icons": [
+    {"src": "app-192.png", "sizes": "192x192", "type": "image/png", "purpose":"any maskable"},
+    {"src": "app-512.png", "sizes": "512x512", "type": "image/png", "purpose":"any maskable"}
+  ]
+}
