@@ -7,10 +7,15 @@ const $ = s => document.querySelector(s);
 const app = $('#app');
 const DBKEY = 'history-master-v1';
 const todayISO = () => { const d = new Date(); return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-'); };
-const defaultDB = () => ({ day:1, srs:{}, answers:[], sessions:[], mastered:[], orderWins:0, created:todayISO(), lastStudy:null });
+const defaultDB = () => ({ day:1, srs:{}, answers:[], sessions:[], mastered:[], orderWins:0, created:todayISO(), lastStudy:null, cardRatings:[], orderAttempts:[], resume:null });
 let db = defaultDB();
 try { const saved = JSON.parse(localStorage.getItem(DBKEY) || 'null'); if (saved && typeof saved==='object') db={...defaultDB(),...saved}; } catch(e) {}
-const save = () => { db.lastStudy=todayISO(); try {localStorage.setItem(DBKEY, JSON.stringify(db));}catch(e){} };
+const save = (studied=false) => {
+  if(studied)db.lastStudy=todayISO();
+  db.resume={...state};
+  try {localStorage.setItem(DBKEY, JSON.stringify(db));}
+  catch(e){toast('학습 기록을 저장할 수 없어. 백업 파일로 기록을 보관해 줘.');}
+};
 const esc = s => String(s??'').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const fmt = n => Number(n).toLocaleString('ko-KR');
 const uniq = items => [...new Set(items)];
@@ -22,66 +27,217 @@ const categories = {politics:'정치·외교',democracy:'민주화·시민',econ
 const icons={home:'<path d="M3 10.5 12 3l9 7.5V21H4V10.5"/><path d="M9 21v-7h6v7"/>',timeline:'<path d="M4 6h16M4 12h16M4 18h16"/><path d="M7 4v4M12 10v4M17 16v4"/>',cards:'<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/>',quiz:'<path d="M5 4h14v16H5z"/><path d="m8 10 2 2 4-4M8 16h8"/>',order:'<path d="M4 6h16M4 12h11M4 18h7"/><path d="m16 15 3 3 3-3"/>',stats:'<path d="M4 20V9m5 11V4m5 16v-7m5 7V7"/>',arrow:'<path d="m5 12 14 0m-6-6 6 6-6 6"/>',refresh:'<path d="M3 12a9 9 0 0 1 15.6-6M21 12a9 9 0 0 1-15.6 6"/><path d="M19 2v5h-5M5 22v-5h5"/>',check:'<path d="m4 12 5 5L20 6"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/>',filter:'<path d="M4 6h16M7 12h10m-7 6h4"/>',book:'<path d="M3 5c3-2 6-2 9 0 3-2 6-2 9 0v15c-3-2-6-2-9 0-3-2-6-2-9 0V5zM12 5v15"/>',chevron:'<path d="m9 6 6 6-6 6"/>',trophy:'<path d="M7 4h10v8a5 5 0 0 1-10 0V4zM7 6H4v3a3 3 0 0 0 3 3m10-6h3v3a3 3 0 0 1-3 3M12 17v4M8 21h8"/>',close:'<path d="m5 5 14 14M19 5 5 19"/>'};
 const ic=(name,size=18)=>`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]||icons.book}</svg>`;
 const tabs=[{id:'home',label:'대시보드',icon:'home'},{id:'timeline',label:'연표 탐색',icon:'timeline'},{id:'cards',label:'플래시카드',icon:'cards'},{id:'quiz',label:'문제풀이',icon:'quiz'},{id:'order',label:'순서 배열',icon:'order'},{id:'stats',label:'학습 기록',icon:'stats'}];
-let state={tab:'home',timelineUnit:'all',timelineType:'all',query:'',includeWorld:false,includeOld:false,flashScope:'day',flashQueue:[],flashAt:0,flashFlipped:false,flashCount:0,quizSetupScope:'day',quizDifficulty:'all',quizKind:'all',quizLength:10,quiz:null,orderScope:'day',orderList:[],orderChecked:false,orderResult:'',recentFilter:'all'};
+const initialState=()=>({tab:'home',timelineUnit:'all',timelineType:'all',query:'',includeWorld:false,includeOld:false,flashScope:'day',flashQueue:[],flashAt:0,flashFlipped:false,quizSetupScope:'day',quizDifficulty:'all',quizKind:'all',quizLength:10,quiz:null,orderScope:'day',orderList:[],orderChecked:false,orderResult:'',recentFilter:'all',quizDraft:'',timelineDay:'all',flashMode:'sequence',flashDirection:'event',flashRated:[]});
+let state=initialState();
 const eventById = Object.fromEntries(DATA.events.map(e=>[e.id,e]));
-const questionsDynamic = DATA.events.filter(e=>e.title!=='미국의 경제 원조·전후 복구'&&e.title!=='3저 호황').map(e=>{
-  const pool=DATA.events.filter(z=>z.id!==e.id && z.world===e.world && z.year!==e.year);
-  // Purposefully use nearby decades where possible but ensure different correct year.
-  const sameEpoch=pool.filter(z=>Math.abs(z.year-e.year)<22);
-  const wrong=sample(sameEpoch.length>=4?sameEpoch:pool,4).map(z=>z.title);
-  return {id:'y_'+e.id,kind:'연표',unit:e.unit,page:e.pages,prompt:`교과서 연표 기준 ${e.year}년에 일어난 사건으로 옳은 것은?`,options:shuffle([e.title,...wrong]),answer:0,explain:`${e.year}년 — ${e.title}. ${e.detail}`,difficulty:2,keyword:'연도',year:e.year};
-}).map(q=>({...q,answer:q.options.indexOf(DATA.events.find(e=>q.id==='y_'+e.id).title)}));
-const allQuestions=[...DATA.questions,...questionsDynamic];
+const stableRank=(key)=>{
+  let value=2166136261;
+  for(const character of key)value=Math.imul(value^character.codePointAt(0),16777619);
+  return value>>>0;
+};
+const datedEvents=DATA.events.filter(e=>/^\d{4}(?:-\d{2}(?:-\d{2})?)?$/.test(e.date));
+const questionsDynamic=datedEvents.flatMap(event=>{
+  const correctTitles=new Set(datedEvents.filter(candidate=>candidate.year===event.year).map(candidate=>candidate.title));
+  const eligible=datedEvents.filter(candidate=>candidate.world===event.world&&!correctTitles.has(candidate.title));
+  const order=candidate=>[(candidate.unit!==event.unit?25:0)+(candidate.cat!==event.cat?8:0)+Math.abs(candidate.year-event.year),stableRank(event.id+candidate.id)];
+  eligible.sort((a,b)=>{const [ax,ay]=order(a),[bx,by]=order(b);return ax-bx||ay-by;});
+  const distractors=uniq(eligible.map(candidate=>candidate.title)).slice(0,4);
+  if(distractors.length<4)return [];
+  const options=[event.title,...distractors].sort((a,b)=>stableRank(event.id+a)-stableRank(event.id+b));
+  return [{id:'y_'+event.id,eventId:event.id,kind:'연표',unit:event.unit,page:event.pages,
+    prompt:`교과서 연표 기준 ${event.year}년에 일어난 사건으로 옳은 것은?`,options,answer:options.indexOf(event.title),
+    explain:`${event.date} — ${event.title}. ${event.detail}`,difficulty:2,keyword:'연도',year:event.year}];
+});
+const titleYears=new Map();
+for(const event of DATA.events){
+  const years=titleYears.get(event.title)||new Set();
+  years.add(event.year);
+  titleYears.set(event.title,years);
+}
+const shortQuestions=datedEvents.filter(event=>titleYears.get(event.title).size===1).map(event=>({
+  id:'year_input_'+event.id,eventId:event.id,kind:'연도 입력',format:'short',unit:event.unit,page:event.pages,
+  prompt:`${event.title}은(는) 몇 년에 일어났을까?`,
+  answer:event.year,explain:`${event.date} — ${event.detail}`,difficulty:1
+}));
+const allQuestions=[...DATA.questions,...questionsDynamic,...shortQuestions];
+const difficultyLabel=['','쉬움','보통','어려움','최상위'];
+const answerText=q=>q.format==='short'?q.answer+'년':q.options[q.answer];
 const questionMap=Object.fromEntries(allQuestions.map(q=>[q.id,q]));
-const isDayUnit=(unit,day)=>{if(day===5)return true;if(day===1)return ['u1','u2'].includes(unit);if(day===2)return unit==='u3';if(day===3)return ['u4','u5'].includes(unit);if(day===4)return ['u6','appendix','world'].includes(unit);return true;};
-const isDayQuestion=(q,day)=>isDayUnit(q.unit,day) || (day===1 && q.unit==='appendix' && /1952|1954|발췌|사사오입/.test(q.prompt));
-const isDayCard=(e,day)=>isDayUnit(e.unit,day) || (day===1 && e.unit==='appendix' && [1952,1954].includes(e.year)) || (day===2 && e.unit==='appendix' && /개헌/.test(e.title) && e.year>=1960 && e.year<=1987);
+const dayRanges={1:[[76,95]],2:[[96,109]],3:[[110,125]],4:[[126,133],[161,163]]};
+function inDay(pages,day){
+  if(day===5)return true;
+  return String(pages).split(/[,·]/).some(reference=>{
+    const numbers=reference.match(/\d+/g)?.map(Number);
+    if(!numbers)return false;
+    const [start,end=start]=numbers;
+    return dayRanges[day].some(([lo,hi])=>start<=hi&&end>=lo);
+  });
+}
+const isDayQuestion=(q,day)=>inDay(q.page,day);
+const isDayCard=(e,day)=>inDay(e.pages,day);
 const reviewedCards=()=>Object.keys(db.srs).length;
 const dueCards=()=>DATA.events.filter(e=>!db.srs[e.id] || db.srs[e.id].due<=todayISO());
 const wrongIds=()=>uniq(db.answers.filter(a=>a.type==='quiz'&&!a.correct).map(a=>a.id));
-const statsInfo=()=>{const total=db.answers.length;const hit=db.answers.filter(a=>a.correct).length;return {total,hit,rate:total?Math.round(hit/total*100):0,reviewed:reviewedCards(),due:dueCards().length};};
+const statsInfo=()=>{const quizzes=db.answers.filter(a=>a.type==='quiz');const total=quizzes.length;const hit=quizzes.filter(a=>a.correct).length;return {total,hit,rate:total?Math.round(hit/total*100):0,reviewed:reviewedCards(),due:dueCards().length};};
 const toast=message=>{const box=$('#toast');box.textContent=message;box.classList.add('show');clearTimeout(window.__toastT);window.__toastT=setTimeout(()=>box.classList.remove('show'),2700);};
-const track=(type,key,correct)=>{db.answers.push({id:key,type,correct,date:todayISO(),time:Date.now()});save();};
+const track=(type,key,correct)=>{db.answers.push({id:key,type,correct,date:todayISO(),time:Date.now()});save(true);};
 const pageHead=(eyebrow,title,desc,cta='')=>`<div class="page-head"><div><div class="eyebrow">${eyebrow}</div><h1 class="page-title">${title}</h1><p class="page-desc">${desc}</p></div>${cta}</div>`;
 const unitOptions=(all=true,more=true)=>`${all?'<option value="all">전 범위</option>':''}${DATA.units.filter(u=>more||u.id!=='world').map(u=>`<option value="${u.id}">${u.short} · p.${u.pages}</option>`).join('')}`;
 const accuracyBar=(correct,total)=>`<div class="progress-line"><span style="width:${total?correct/total*100:0}%"></span></div>`;
 const dayTitle={1:'광복과 6·25 전쟁',2:'민주화의 길',3:'경제 성장과 사회문화',4:'민주화 이후·부록 연표',5:'전 범위 최종 점검'};
-const dayPages={1:'교과서 76–95쪽',2:'96–109쪽 + 개헌',3:'110–125쪽',4:'128–133, 161–163쪽',5:'전체 범위'};
+const dayPages={1:'교과서 76–95쪽',2:'96–109쪽',3:'110–125쪽',4:'126–133, 161–163쪽',5:'전체 범위'};
 const activeDay=()=>clamp(Number(db.day)||1,1,5);
 const unitForCard=(e)=>e.world?'부록 세계사':(DATA.units.find(u=>u.id===e.unit)?.short||'부록 한국사');
 function navigate(tab){state.tab=tab; if(tab==='cards'&&!state.flashQueue.length)resetFlash(false); if(tab==='order'&&!state.orderList.length)generateOrder(); if(tab==='quiz'&&state.quiz?.finished)state.quiz=null;render();window.scrollTo(0,0);}
 function renderNav(){const html=tabs.map(t=>`<button class="nav-button ${state.tab===t.id?'active':''}" type="button" data-action="nav" data-tab="${t.id}" aria-current="${state.tab===t.id?'page':'false'}">${ic(t.icon)}<span>${t.label}</span></button>`).join('');$('#sideNav').innerHTML=html;$('#mobileNav').innerHTML=tabs.map(t=>`<button class="${state.tab===t.id?'active':''}" type="button" data-action="nav" data-tab="${t.id}">${ic(t.icon)}<span>${t.label.replace(' 연표','')}</span></button>`).join('');$('#crumb').textContent=tabs.find(t=>t.id===state.tab)?.label||'대시보드';}
-function render(){renderNav();switch(state.tab){case 'home':renderHome();break;case 'timeline':renderTimeline();break;case 'cards':renderCards();break;case 'quiz':renderQuiz();break;case 'order':renderOrder();break;case 'stats':renderStats();break;}}
+function render(){renderNav();switch(state.tab){case 'home':renderHome();app.insertAdjacentHTML('beforeend',learningSummary());break;case 'timeline':renderTimeline();break;case 'cards':renderCards();break;case 'quiz':renderQuiz();break;case 'order':renderOrder();break;case 'stats':renderStats();app.insertAdjacentHTML('beforeend',learningSummary());break;}}
 function renderHome(){let info=statsInfo(),day=activeDay();let dailyAnswers=db.answers.filter(a=>a.date===todayISO()).length;app.innerHTML=`
 <div class="hero"><div class="eyebrow">● YOUR 5-DAY MISSION</div><h1>흐름을 이해하면,<br><em>역사가 연결된다.</em></h1><p>비상교육 한국사2 시험 범위만 담은 맞춤형 학습실. 연표를 익히고, 가리고, 문제로 확인하면서 5일 동안 빈틈을 줄여 보자.</p><div class="hero-ctas"><button class="btn primary" data-action="nav" data-tab="cards">${ic('cards',17)} 암기 시작하기</button><button class="btn secondary" data-action="nav" data-tab="quiz">${ic('quiz',17)} 문제 풀기 ${ic('arrow',14)}</button></div></div>
 <div class="stats-grid"><div class="metric"><span class="meta">학습 연표 <span class="circle">◈</span></span><strong>${fmt(DATA.events.length)}<span class="small muted">개</span></strong><div class="sub">본문 + 부록 한국사·세계사</div></div><div class="metric"><span class="meta">문제은행 <span class="circle">✎</span></span><strong>${fmt(allQuestions.length)}<span class="small muted">문항</span></strong><div class="sub">직접 제작 ${DATA.questions.length} + 연표형 자동</div></div><div class="metric"><span class="meta">누적 정답률 <span class="circle">◎</span></span><strong>${info.rate}<span class="small muted">%</span></strong><div class="sub">풀이 ${info.total}회 · 정답 ${info.hit}회</div></div><div class="metric"><span class="meta">복습한 카드 <span class="circle">✦</span></span><strong>${info.reviewed}<span class="small muted">장</span></strong><div class="sub">전체 ${DATA.events.length}장 중</div></div></div>
 <div class="two-col"><section class="panel"><div class="row-between"><div><div class="eyebrow">TODAY'S ROUTE</div><h2 class="section-title">DAY ${day} · ${dayTitle[day]}</h2></div><span class="pill p-mint">${dayPages[day]}</span></div><div class="path-list"><button class="path-item" data-action="nav" data-tab="timeline"><span class="path-num">01</span><span class="path-info"><b>개념의 뼈대 잡기</b><span>연표를 펼쳐 사건의 원인·결과 연결하기</span></span><span class="path-arrow">${ic('chevron',17)}</span></button><button class="path-item" data-action="nav" data-tab="cards"><span class="path-num">02</span><span class="path-info"><b>플래시카드로 기억 고정하기</b><span>뒤집고 복습 정도를 평가하면 기록 저장</span></span><span class="path-arrow">${ic('chevron',17)}</span></button><button class="path-item" data-action="nav" data-tab="quiz"><span class="path-num">03</span><span class="path-info"><b>실전 감각으로 완성하기</b><span>사료·비교·함정 선지 5지선다 + 오답 추적</span></span><span class="path-arrow">${ic('chevron',17)}</span></button></div><div class="row-between mt-18"><span class="muted small">오늘 푼 문제 ${dailyAnswers}회</span><span class="muted small">하루 15문제부터</span></div>${accuracyBar(Math.min(dailyAnswers,15),15)}</section>
 <section class="panel"><div class="eyebrow">STUDY SPRINT</div><h2 class="section-title">나의 5일 계획</h2><div class="day-row">${[1,2,3,4,5].map(i=>`<button class="day-pill ${i===day?'active':''}" data-action="day" data-day="${i}">D${i}<small>${['11.20','11.21','11.22','11.23','11.24'][i-1]}</small></button>`).join('')}</div><p class="small muted" style="margin:22px 0 6px">현재 선택한 학습</p><h3 style="margin:0 0 3px">${dayTitle[day]}</h3><div class="small muted">${dayPages[day]} · 진도에 맞춰 플래시카드와 시험 문제 자동 선택</div><div class="divider-line"></div><div class="eyebrow">MEMORY TIP</div><p style="color:#d2e1e8;margin:6px 0 16px">정답을 보기 전에 사건의 <b style="color:var(--mint)">원인 → 과정 → 결과</b>를 말해 보자. '왜?'까지 설명하면 사료형 문제에서 훨씬 강해져.</p><button class="btn ghost full" data-action="nav" data-tab="order">${ic('order',17)} 사건 순서 배열로 도전</button></section></div>
 <div class="banner-info">📚 <b>시험 범위만 수록:</b> p.76–127, p.128–133, p.161–163. 부록 p.162–163에 실린 1945년 이전 한국사·세계사 연표는 별도 필터에서 학습할 수 있어.</div>`;}
-function filteredTimeline(){let events=DATA.events.filter(e=>{if(state.timelineUnit!=='all'&&e.unit!==state.timelineUnit)return false;if(state.timelineUnit==='all'&&e.world&&!state.includeWorld)return false;if(state.timelineUnit==='all'&&!e.world&&e.year<1945&&!state.includeOld)return false;if(state.timelineType!=='all'&&e.cat!==state.timelineType)return false;const q=state.query.trim().toLowerCase();if(q&&!(`${e.title} ${e.detail} ${e.hint} ${e.year}`).toLowerCase().includes(q))return false;return true;});return events.sort((a,b)=>a.sort-b.sort||a.id.localeCompare(b.id));}
+function filteredTimeline(){let events=DATA.events.filter(e=>{if(state.timelineDay!=='all'&&!isDayCard(e,Number(state.timelineDay)))return false;if(state.timelineUnit!=='all'&&e.unit!==state.timelineUnit)return false;if(state.timelineUnit==='all'&&e.world&&!state.includeWorld)return false;if(state.timelineUnit==='all'&&!e.world&&e.year<1945&&!state.includeOld)return false;if(state.timelineType!=='all'&&e.cat!==state.timelineType)return false;const q=state.query.trim().toLowerCase();if(q&&!(`${e.title} ${e.detail} ${e.hint} ${e.year}`).toLowerCase().includes(q))return false;return true;});return events.sort((a,b)=>a.sort-b.sort||a.id.localeCompare(b.id));}
 function renderTimeline(resultsOnly=false){const items=filteredTimeline();let marker=null;const cards=items.map(e=>{const decade=Math.floor(e.year/10)*10;let m='';if(marker!==decade){marker=decade;m=`<div class="timeline-year-mark">${decade}s <span style="font-size:11px;font-weight:600;color:var(--faint)">/ 시간의 흐름</span></div>`;}return m+`<div class="timeline-entry kind-${e.cat}"><details class="timeline-card"><summary><span class="timeline-date mono">${esc(e.date)}</span><span class="timeline-main">${esc(e.title)}<small>${categories[e.cat]} · 교과서 p.${esc(e.pages)}</small></span><span class="timeline-chevron">⌄</span></summary><div class="timeline-body">${esc(e.detail)}<br><span class="timeline-memory">🧠 ${esc(e.hint)}</span><div class="unit-note">연결 범위: ${esc(unitForCard(e))}</div></div></details></div>`;}).join('');
 const results=`<div class="row-between"><span class="count-note">총 <b style="color:var(--ink)">${fmt(items.length)}</b>건 · 날짜와 사건을 눌러 자세히 보기</span><span class="count-note">색상은 주제별 분류</span></div><div class="legend">${Object.entries(categories).map(([k,v])=>`<span class="tag kind-${k}"><span class="dot"></span>${v}</span>`).join('')}</div>${items.length?`<div class="timeline-list">${cards}</div>`:'<div class="empty"><h3>표시할 사건이 없어</h3>검색어나 필터를 바꿔 줘.</div>'}`;
 if(resultsOnly){app.querySelector('#timelineResults').innerHTML=results;return;}
-app.innerHTML=pageHead('CHRONOLOGY / SOURCE-BASED','연표 탐색','시험에 나오는 사건을 시간순으로 살펴보고, 사건을 눌러 원인과 기억법을 확인해.',`<button class="btn secondary small" data-action="nav" data-tab="order">${ic('order',16)} 순서 훈련</button>`)+`<div class="panel"><div class="filter-bar"><select class="select" data-change="timeline-unit" aria-label="단원 선택">${unitOptions()}</select><select class="select" data-change="timeline-type" aria-label="사건 종류"><option value="all">모든 사건 종류</option>${Object.entries(categories).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><input class="search" data-input="timeline-search" placeholder="사건·연도·키워드 검색" value="${esc(state.query)}" aria-label="연표 검색"></div><div class="filter-bar"><label class="check-label"><input type="checkbox" data-change="timeline-world" ${state.includeWorld?'checked':''}> 부록 세계사 포함</label><label class="check-label"><input type="checkbox" data-change="timeline-old" ${state.includeOld?'checked':''}> 1945년 이전 한국사 포함</label></div><div id="timelineResults">${results}</div></div>`;
+app.innerHTML=pageHead('CHRONOLOGY / SOURCE-BASED','연표 탐색','시험에 나오는 사건을 시간순으로 살펴보고, 사건을 눌러 원인과 기억법을 확인해.',`<button class="btn secondary small" data-action="nav" data-tab="order">${ic('order',16)} 순서 훈련</button>`)+`<div class="panel"><div class="day-row" aria-label="연표 학습일">${['all',1,2,3,4,5].map(day=>`<button class="day-pill ${String(day)===state.timelineDay?'active':''}" aria-pressed="${String(day)===state.timelineDay}" data-action="timeline-day" data-day="${day}">${day==='all'?'전체':'DAY '+day}</button>`).join('')}</div><div class="filter-bar"><select class="select" data-change="timeline-unit" aria-label="단원 선택">${unitOptions()}</select><select class="select" data-change="timeline-type" aria-label="사건 종류"><option value="all">모든 사건 종류</option>${Object.entries(categories).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><input class="search" data-input="timeline-search" placeholder="사건·연도·키워드 검색" value="${esc(state.query)}" aria-label="연표 검색"></div><div class="filter-bar"><label class="check-label"><input type="checkbox" data-change="timeline-world" ${state.includeWorld?'checked':''}> 부록 세계사 포함</label><label class="check-label"><input type="checkbox" data-change="timeline-old" ${state.includeOld?'checked':''}> 1945년 이전 한국사 포함</label></div><div id="timelineResults">${results}</div></div>`;
 app.querySelector('[data-change="timeline-unit"]').value=state.timelineUnit;app.querySelector('[data-change="timeline-type"]').value=state.timelineType;}
-function getFlashPool(){let items=DATA.events.filter(e=>{switch(state.flashScope){case 'day':return isDayCard(e,activeDay());case 'due':return !db.srs[e.id]||db.srs[e.id].due<=todayISO();case 'weak':return !!db.srs[e.id]&&(db.srs[e.id].lapses||0)>0;case 'all':return true;default:return e.unit===state.flashScope;}});return items;}
-function resetFlash(doRender=true){const pool=getFlashPool();const priority=shuffle(pool.filter(e=>db.srs[e.id] && db.srs[e.id].due<=todayISO()));const others=shuffle(pool.filter(e=>!priority.some(p=>p.id===e.id)));state.flashQueue=[...priority,...others].map(e=>e.id);state.flashAt=0;state.flashFlipped=false;state.flashCount=0;if(doRender)renderCards();}
-function renderCards(){const queue=state.flashQueue;const at=state.flashAt;const e=eventById[queue[at]];const options=`<select class="select" data-change="flash-scope" aria-label="암기 카드 범위"><option value="day">DAY ${activeDay()} 범위</option><option value="due">오늘 복습할 카드</option><option value="weak">자주 틀린 카드</option><option value="all">전체 카드</option>${DATA.units.map(u=>`<option value="${u.id}">${u.short} · p.${u.pages}</option>`).join('')}</select>`;
-let body;if(!e){body=`<div class="empty"><h3>${state.flashQueue.length?'이 세션의 카드 완료!':'선택한 범위에 카드가 없어'}</h3><p>복습 기록은 자동으로 저장됐어. 다른 범위를 선택하거나 새 세션을 시작해 봐.</p><button class="btn primary" data-action="flash-reset">${ic('refresh',15)} 다시 학습</button></div>`;}else{const reviewed=db.srs[e.id]||null;body=`<div class="row-between"><span class="pill kind-${e.cat}"><span class="dot"></span>${esc(unitForCard(e))} · p.${esc(e.pages)}</span><span class="muted small mono">${Math.min(at+1,queue.length)} / ${queue.length}</span></div><div class="progress-line"><span style="width:${queue.length?at/queue.length*100:0}%"></span></div><div class="flip-card ${state.flashFlipped?'flipped':''}" role="button" tabindex="0" aria-label="카드 뒤집기" data-action="flip"><div class="flip-inner"><div class="flip-face flip-front"><div class="flip-label">WHEN DID IT HAPPEN?</div><h2>${esc(e.title)}</h2><div class="tap-hint">눌러서 연도와 해설 보기 ↗</div></div><div class="flip-face flip-back"><div class="flip-label">THE ANSWER</div><h2>${esc(e.date)}</h2><p><b>${esc(e.title)}</b> — ${esc(e.detail)}</p><div class="timeline-memory">🧠 ${esc(e.hint)}</div></div></div></div>${state.flashFlipped?`<div class="rating-buttons"><button class="rate again" data-action="rate" data-rate="again">다시<small>잠시 후 반복</small></button><button class="rate" data-action="rate" data-rate="hard">어려움<small>내일 복습</small></button><button class="rate good" data-action="rate" data-rate="good">기억함<small>간격 늘리기</small></button><button class="rate easy" data-action="rate" data-rate="easy">완벽함<small>장기 기억</small></button></div>`:`<div class="banner-info">먼저 연도를 스스로 떠올려 봐. 답을 확인한 뒤 <b>다시 / 어려움 / 기억함 / 완벽함</b> 중 하나를 골라 복습 간격을 정할 수 있어.</div>`}<div class="flash-bottom"><span>이번 세션: ${state.flashCount}장 완료 ${reviewed?'· 복습 카드':'· 새 카드'}</span><button class="btn ghost small" data-action="flash-skip">이 카드 건너뛰기 ${ic('arrow',13)}</button></div>`;}
-app.innerHTML=pageHead('ACTIVE RECALL / SPACED REVIEW','플래시카드','연도 → 사건을 거꾸로도 떠올려 봐. 복습 주기는 답변의 자신감에 따라 자동 조정돼.',`<button class="btn small secondary" data-action="flash-reset">${ic('refresh',14)} 섞어서 시작</button>`)+`<div class="quiz-stage"><div class="panel"><div class="row-between"><div class="eyebrow" style="margin:0">MEMORY DECK</div>${options}</div><div class="unit-note">기억한 카드 ${fmt(reviewedCards())}개 · 아직 본 적 없는 카드 ${fmt(DATA.events.length-reviewedCards())}개</div>${body}</div></div>`;app.querySelector('[data-change="flash-scope"]').value=state.flashScope;}
-function rateFlash(rate){const id=state.flashQueue[state.flashAt],e=eventById[id];if(!e)return;const old=db.srs[id]||{ease:2.4,interval:0,reps:0,lapses:0};let ease=old.ease,interval=old.interval,reps=old.reps,lapses=old.lapses;
-if(rate==='again'){reps=0;interval=0;lapses++;ease=Math.max(1.3,ease-.2);state.flashQueue.push(id);}else if(rate==='hard'){reps++;interval=1;ease=Math.max(1.3,ease-.12);}else if(rate==='good'){reps++;interval=reps===1?1:reps===2?3:Math.round(Math.max(1,interval)*ease);}else{reps++;ease=Math.min(3.4,ease+.13);interval=reps===1?3:reps===2?7:Math.round(Math.max(1,interval)*ease*1.35);}
-db.srs[id]={ease,interval,reps,lapses,due:dateAdd(interval),seen:(old.seen||0)+1,last:todayISO()};if(rate==='again')track('flash',id,false);else track('flash',id,true);state.flashAt++;state.flashCount++;state.flashFlipped=false;save();renderCards();if(state.flashAt>=state.flashQueue.length)toast('이번 세션 완료! 학습 내용이 저장됐어.');}
-function selectQuestionPool(){let pool=allQuestions.filter(q=>{const scope=state.quizSetupScope;if(scope==='all')return true;if(scope==='day')return isDayQuestion(q,activeDay());if(scope==='wrong')return wrongIds().includes(q.id);return q.unit===scope;});if(state.quizDifficulty!=='all')pool=pool.filter(q=>q.difficulty>=Number(state.quizDifficulty));if(state.quizKind!=='all')pool=pool.filter(q=>q.kind===state.quizKind);return pool;}
-function startQuiz(){const pool=selectQuestionPool();if(!pool.length){toast('선택한 조건에 맞는 문제가 없어.');return;}const selected=sample(pool,Math.min(Number(state.quizLength),pool.length));beginQuiz(selected.map(q=>q.id));}
-function beginQuiz(items){state.quiz={items,at:0,chosen:null,correct:0,answers:[],finished:false,startedAt:Date.now()};renderQuiz();window.scrollTo(0,0);}
-function submitAnswer(choice){const qstate=state.quiz;if(!qstate||qstate.finished||qstate.chosen!==null)return;const q=questionMap[qstate.items[qstate.at]],correct=choice===q.answer;qstate.chosen=choice;qstate.correct+=correct?1:0;qstate.answers.push({id:q.id,correct,chosen:choice});track('quiz',q.id,correct);renderQuiz();}
-function nextQuiz(){const qstate=state.quiz;if(!qstate||qstate.chosen===null)return;if(qstate.at+1>=qstate.items.length){qstate.finished=true;const summary={date:todayISO(),score:qstate.correct,total:qstate.items.length,seconds:Math.round((Date.now()-qstate.startedAt)/1000),questions:qstate.answers};db.sessions.unshift(summary);db.sessions=db.sessions.slice(0,50);save();}else{qstate.at++;qstate.chosen=null;}renderQuiz();window.scrollTo(0,0);}
+const ratingLabels={known:'알고 있음',unsure:'헷갈림',unknown:'모름'};
+function recentQuizMisses(){
+  const latest=new Map(db.answers.filter(a=>a.type==='quiz').map(a=>[a.id,a]));
+  return new Set([...latest.values()].filter(a=>!a.correct).map(a=>questionMap[a.id]?.eventId).filter(Boolean));
+}
+function resetFlash(doRender=true){
+  const misses=recentQuizMisses();
+  let pool=DATA.events.filter(e=>{
+    if(state.flashScope==='day')return isDayCard(e,activeDay());
+    if(state.flashScope==='due')return !db.srs[e.id]||db.srs[e.id].due<=todayISO();
+    return state.flashScope==='all'||e.unit===state.flashScope;
+  });
+  pool.sort((a,b)=>a.sort-b.sort||a.id.localeCompare(b.id));
+  if(state.flashMode==='random')pool=shuffle(pool);
+  if(state.flashMode==='weak')pool=pool.filter(e=>misses.has(e.id)||['unknown','unsure'].includes(db.srs[e.id]?.rating)||(!db.srs[e.id]?.rating&&db.srs[e.id]?.lapses));
+  if(state.flashMode==='weak'||state.flashScope==='due'){
+    const priority=e=>Number(misses.has(e.id))*2+(db.srs[e.id]?.rating==='unknown'?4:db.srs[e.id]?.rating==='unsure'?3:db.srs[e.id]?.due<=todayISO()?1:0);
+    pool.sort((a,b)=>priority(b)-priority(a));
+  }
+  state.flashQueue=pool.map(e=>e.id);
+  state.flashAt=0;
+  state.flashFlipped=false;
+  state.flashRated=[];
+  if(doRender)renderCards();
+}
+function moveFlash(delta){
+  const index=clamp(state.flashAt+delta,0,state.flashQueue.length-1);
+  if(!state.flashQueue.length||index===state.flashAt)return;
+  state.flashAt=index;
+  state.flashFlipped=false;
+  save();
+  renderCards();
+}
+function renderCards(){
+  const {flashQueue:queue,flashAt:at,flashFlipped:flipped,flashRated:rated}=state;
+  const event=eventById[queue[at]];
+  const reversed=state.flashDirection==='date';
+  const settings=`<div class="filter-bar">
+    <select class="select" data-change="flash-scope" aria-label="암기 카드 범위"><option value="day">DAY ${activeDay()} 범위</option><option value="due">오늘 복습할 카드</option>${unitOptions()}</select>
+    <select class="select" data-change="flash-mode" aria-label="학습 모드"><option value="sequence">시간순</option><option value="random">무작위</option><option value="weak">오답 중심</option></select>
+    <select class="select" data-change="flash-direction" aria-label="암기 방향"><option value="event">사건 → 시기</option><option value="date">시기 → 사건</option></select>
+  </div>`;
+  let body='<div class="empty">선택한 조건에 맞는 카드가 없어.</div>';
+  if(event){
+    const percent=Math.round(100*rated.length/queue.length);
+    const lastRating=ratingLabels[db.srs[event.id]?.rating];
+    body=`<div class="row-between"><span class="pill kind-${event.cat}">${esc(unitForCard(event))} · p.${esc(event.pages)}</span><span class="mono">${at+1} / ${queue.length}</span></div>
+    <div class="unit-note" role="status">${rated.length}장 평가 · ${percent}% 완료${lastRating?' · 최근 평가 '+lastRating:''}</div>${accuracyBar(rated.length,queue.length)}
+    <div class="flip-card ${flipped?'flipped':''}" role="button" tabindex="0" aria-label="카드 뒤집기" aria-pressed="${flipped}" data-action="flip">
+      <div class="flip-inner">
+        <div class="flip-face flip-front" aria-hidden="${flipped}"><div class="flip-label">${reversed?'어떤 사건일까?':'언제 일어났을까?'}</div><h2>${esc(reversed?event.date:event.title)}</h2><span class="tap-hint">눌러서 정답 확인</span></div>
+        <div class="flip-face flip-back" aria-hidden="${!flipped}"><h2>${esc(reversed?event.title:event.date)}</h2><p>${esc(event.detail)}</p><div class="timeline-memory">${esc(event.hint)}</div></div>
+      </div>
+    </div>
+    ${flipped?`<div class="rating-buttons">${Object.entries(ratingLabels).map(([key,label])=>`<button class="rate" data-action="rate" data-rate="${key}">${label}</button>`).join('')}</div>`:'<p class="muted">답을 확인한 뒤 기억 수준을 선택해 줘.</p>'}
+    <div class="row-between flash-controls"><button class="btn secondary" data-action="flash-prev" ${at===0?'disabled':''}>← 이전 카드</button><button class="btn secondary" data-action="flash-next" ${at===queue.length-1?'disabled':''}>다음 카드 →</button></div>`;
+  }
+  app.innerHTML=pageHead('ACTIVE RECALL','플래시카드','카드를 탭해 정답을 확인하고, 좌우로 밀거나 방향키로 이동해 봐.', '<button class="btn small secondary" data-action="flash-reset">새 카드 세션</button>')+`<div class="quiz-stage"><div class="panel">${settings}${body}</div></div>`;
+  for(const field of ['Scope','Mode','Direction'])app.querySelector(`[data-change="flash-${field.toLowerCase()}"]`).value=state['flash'+field];
+}
+function flipCard(){
+  const card=app.querySelector('.flip-card');
+  if(!card)return;
+  state.flashFlipped=!state.flashFlipped;
+  const previous=getComputedStyle(card.querySelector('.flip-inner')).transform;
+  renderCards();
+  const replacement=app.querySelector('.flip-card');
+  const newInner=replacement.querySelector('.flip-inner');
+  if(previous!=='none')newInner.style.transform=previous;
+  else newInner.style.transform=state.flashFlipped?'rotateY(0deg)':'rotateY(180deg)';
+  newInner.getBoundingClientRect();
+  newInner.style.transform='';
+}
+function rateFlash(rating){
+  const id=state.flashQueue[state.flashAt];
+  if(!id||!state.flashFlipped||!Object.hasOwn(ratingLabels,rating))return;
+  const old=db.srs[id]||{};
+  const interval=rating==='unknown'?0:rating==='unsure'?1:Math.min(60,Math.max(3,(old.interval||0)*2));
+  db.srs[id]={...old,rating,interval,due:dateAdd(interval),seen:(old.seen||0)+1,last:todayISO(),lapses:(old.lapses||0)+(rating==='unknown'?1:0)};
+  db.cardRatings.push({id,rating,date:todayISO(),time:Date.now()});
+  if(!state.flashRated.includes(id))state.flashRated.push(id);
+  save(true);
+  if(state.flashAt<state.flashQueue.length-1)moveFlash(1);
+  else renderCards();
+}
+function practiceSample(pool,n){
+  const lastAttempts=new Map(db.answers.filter(a=>a.type==='quiz').map(a=>[a.id,a]));
+  const weight=q=>{
+    const card=db.srs[q.eventId];
+    const attempt=lastAttempts.get(q.id);
+    return (attempt?.correct===false?3:1)*(card?.rating==='unknown'?4:card?.rating==='unsure'?2:card?.rating==='known'&&card.due>todayISO()?0.5:1);
+  };
+  return pool.map(q=>({q,rank:-Math.log(1-Math.random())/weight(q)})).sort((a,b)=>a.rank-b.rank).slice(0,n).map(x=>x.q);
+}
+function selectQuestionPool(){let pool=allQuestions.filter(q=>{const scope=state.quizSetupScope;if(scope==='all')return true;if(scope==='day')return isDayQuestion(q,activeDay());if(scope==='wrong')return wrongIds().includes(q.id);return q.unit===scope;});if(state.quizDifficulty!=='all')pool=pool.filter(q=>q.difficulty===Number(state.quizDifficulty));if(state.quizKind!=='all')pool=pool.filter(q=>q.kind===state.quizKind);return pool;}
+function startQuiz(){const pool=selectQuestionPool();if(!pool.length){toast('선택한 조건에 맞는 문제가 없어.');return;}const count=Math.min(Number(state.quizLength),pool.length);const select=state.quizSetupScope==='day'?practiceSample:sample;
+  let selected=select(pool,count);
+  if(count>1&&selected.every(q=>q.format===selected[0].format)){
+    const others=pool.filter(q=>q.format!==selected[0].format);
+    if(others.length)selected=shuffle([...selected.slice(0,-1),...select(others,1)]);
+  }
+  beginQuiz(selected.map(q=>q.id));}
+function beginQuiz(items){state.quizDraft='';state.quiz={items,at:0,chosen:null,correct:0,answers:[],finished:false,startedAt:Date.now()};renderQuiz();window.scrollTo(0,0);}
+function submitAnswer(choice){
+  const session=state.quiz;
+  if(!session||session.finished||session.chosen!==null)return;
+  const question=questionMap[session.items[session.at]];
+  const short=question.format==='short';
+  if(short?typeof choice!=='string'||!choice.trim():!Number.isInteger(choice)||choice<0||choice>=question.options.length)return;
+  const normalized=short?choice.normalize('NFKC').trim().replace(/\s*년$/,''):choice;
+  const correct=normalized===(short?String(question.answer):question.answer);
+  session.chosen=choice;
+  session.correct+=Number(correct);
+  session.answers.push({id:question.id,correct,chosen:choice});
+  track('quiz',question.id,correct);
+  renderQuiz();
+}
+function nextQuiz(){const qstate=state.quiz;if(!qstate||qstate.chosen===null)return;if(qstate.at+1>=qstate.items.length){qstate.finished=true;const summary={date:todayISO(),score:qstate.correct,total:qstate.items.length,seconds:Math.round((Date.now()-qstate.startedAt)/1000),questions:qstate.answers};db.sessions.unshift(summary);db.sessions=db.sessions.slice(0,50);save();}else{qstate.at++;qstate.chosen=null;state.quizDraft='';}renderQuiz();window.scrollTo(0,0);}
 function renderQuiz(){const s=state.quiz;
-if(!s){let pool=selectQuestionPool();app.innerHTML=pageHead('EXAM SIMULATOR','실전 문제풀이','교과서형 사료 해석, 함정 선지, 사건 순서와 개헌 비교를 5지선다로 풀어 보자.')+`<div class="quiz-stage"><div class="panel"><div class="eyebrow">STEP 01 / 범위 선택</div><h2 class="section-title">어디부터 도전할까?</h2><div class="preset-grid"><button class="preset-card ${state.quizSetupScope==='day'?'selected':''}" data-action="quiz-scope" data-scope="day">${ic('clock',20)}<b>오늘의 집중 훈련</b><span>DAY ${activeDay()} · ${dayTitle[activeDay()]}</span></button><button class="preset-card ${state.quizSetupScope==='all'?'selected':''}" data-action="quiz-scope" data-scope="all">${ic('trophy',20)}<b>전 범위 모의고사</b><span>한국사 + 개헌 + 부록 연표</span></button><button class="preset-card ${state.quizSetupScope==='wrong'?'selected':''}" data-action="quiz-scope" data-scope="wrong">${ic('refresh',20)}<b>오답만 재도전</b><span>지금까지 틀린 문제만 다시</span></button></div><div class="form-row"><div class="field"><label>교과서 단원 또는 범위</label><select class="select" data-change="quiz-scope"><option value="day">DAY ${activeDay()} 집중 범위</option><option value="all">전 범위</option><option value="wrong">나의 오답</option>${DATA.units.map(u=>`<option value="${u.id}">${u.short} (p.${u.pages})</option>`).join('')}</select></div><div class="field"><label>난이도</label><select class="select" data-change="quiz-difficulty"><option value="all">전체 난이도</option><option value="3">고난도만 ★★★</option></select></div><div class="field"><label>문제 유형</label><select class="select" data-change="quiz-kind"><option value="all">전체 유형</option>${uniq(allQuestions.map(q=>q.kind)).map(k=>`<option value="${k}">${k} 문제</option>`).join('')}</select></div><div class="field"><label>문항 수</label><select class="select" data-change="quiz-length"><option value="10">10문항 · 빠른 점검</option><option value="20">20문항 · 단원 테스트</option><option value="30">30문항 · 실전 모의고사</option></select></div></div><div class="banner-info">현재 설정으로 <b>${pool.length}문항</b> 출제 가능 · 오답과 해설은 자동 저장 · 연표형 문제는 교과서 연표 사건에서 생성해.</div><button class="btn primary full" data-action="quiz-start">시험 시작하기 ${ic('arrow',16)}</button></div></div>`;
+if(!s){let pool=selectQuestionPool();app.innerHTML=pageHead('EXAM SIMULATOR','실전 문제풀이','객관식, OX, 연도 입력을 섞어 풀고, 해설에서 교과서 쪽수를 확인해 봐.')+`<div class="quiz-stage"><div class="panel"><div class="eyebrow">STEP 01 / 범위 선택</div><h2 class="section-title">어디부터 도전할까?</h2><div class="preset-grid"><button class="preset-card ${state.quizSetupScope==='day'?'selected':''}" data-action="quiz-scope" data-scope="day">${ic('clock',20)}<b>오늘의 집중 훈련</b><span>DAY ${activeDay()} · ${dayTitle[activeDay()]}</span></button><button class="preset-card ${state.quizSetupScope==='all'?'selected':''}" data-action="quiz-scope" data-scope="all">${ic('trophy',20)}<b>전 범위 모의고사</b><span>한국사 + 개헌 + 부록 연표</span></button><button class="preset-card ${state.quizSetupScope==='wrong'?'selected':''}" data-action="quiz-scope" data-scope="wrong">${ic('refresh',20)}<b>오답만 재도전</b><span>지금까지 틀린 문제만 다시</span></button></div><div class="form-row"><div class="field"><label>교과서 단원 또는 범위</label><select class="select" data-change="quiz-scope"><option value="day">DAY ${activeDay()} 집중 범위</option><option value="all">전 범위</option><option value="wrong">나의 오답</option>${DATA.units.map(u=>`<option value="${u.id}">${u.short} (p.${u.pages})</option>`).join('')}</select></div><div class="field"><label>난이도</label><select class="select" data-change="quiz-difficulty"><option value="all">전체 난이도</option>${difficultyLabel.slice(1).map((label,i)=>`<option value="${i+1}">${label}</option>`).join('')}</select></div><div class="field"><label>문제 유형</label><select class="select" data-change="quiz-kind"><option value="all">전체 유형</option>${uniq(allQuestions.map(q=>q.kind)).map(k=>`<option value="${k}">${k} 문제</option>`).join('')}</select></div><div class="field"><label>문항 수</label><select class="select" data-change="quiz-length"><option value="10">10문항 · 빠른 점검</option><option value="20">20문항 · 단원 테스트</option><option value="30">30문항 · 실전 모의고사</option></select></div></div><div class="banner-info">현재 설정으로 <b>${pool.length}문항</b> 출제 가능 · 오답과 해설은 자동 저장 · 연표형 문제는 교과서 연표 사건에서 생성해.</div><button class="btn primary full" data-action="quiz-start">시험 시작하기 ${ic('arrow',16)}</button></div></div>`;
 app.querySelector('[data-change="quiz-scope"]').value=state.quizSetupScope;app.querySelector('[data-change="quiz-difficulty"]').value=state.quizDifficulty;app.querySelector('[data-change="quiz-kind"]').value=state.quizKind;app.querySelector('[data-change="quiz-length"]').value=String(state.quizLength);return;}
-if(s.finished){const pct=Math.round(s.correct/s.items.length*100);const misses=s.answers.filter(a=>!a.correct).map(a=>({...a,q:questionMap[a.id]}));app.innerHTML=pageHead('SESSION COMPLETE','시험 결과','수고했어. 틀린 문항만 다시 보면 점수가 빠르게 올라가.')+`<div class="quiz-stage"><div class="panel"><div class="result-score"><div class="score-ring" style="--score:${pct}%"><strong>${pct}점</strong></div><h2 style="font-size:25px;margin:0">${pct>=90?'완벽에 가까워!':pct>=70?'실력이 쌓이고 있어!':'오답을 연결해 보자!'}</h2><div class="result-label">${s.items.length}문항 중 <b style="color:var(--mint)">${s.correct}문항 정답</b> · ${s.items.length-s.correct}문항 오답</div></div>${accuracyBar(s.correct,s.items.length)}<div class="row-between mt-18"><button class="btn secondary" data-action="quiz-new">다른 시험 보기</button><button class="btn primary" data-action="quiz-retry">${ic('refresh',14)} ${misses.length?'오답 재시험':'다시 풀기'}</button></div>${misses.length?`<hr class="separator"><h3 class="section-title">이번에 틀린 문제 (${misses.length})</h3>${misses.map(a=>`<div class="review-row"><b>${esc(a.q.prompt)}</b><p>정답: <span style="color:var(--mint)">${esc(a.q.options[a.q.answer])}</span> · 교과서 p.${esc(a.q.page)}</p><p>${esc(a.q.explain)}</p></div>`).join('')}`:''}</div></div>`;return;}
-const q=questionMap[s.items[s.at]],reveal=s.chosen!==null;app.innerHTML=pageHead('FOCUSED PRACTICE',`실전 문제풀이`,`${s.items.length}문항 · 답을 고르면 정답과 해설을 확인할 수 있어.`,`<button class="btn small ghost" data-action="quiz-exit">나가기 ${ic('close',14)}</button>`)+`<div class="quiz-stage"><div class="panel"><div class="quiz-meta"><span><span class="pill">${esc(q.kind)}</span> <span class="pill">난도 ${'★'.repeat(q.difficulty)}</span> <span class="pill">교과서 p.${esc(q.page)}</span></span><b class="mono">${s.at+1} <span class="muted">/ ${s.items.length}</span></b></div><div class="quiz-progress"><span style="width:${s.at/s.items.length*100}%"></span></div><h2 class="quiz-question">${esc(q.prompt)}</h2><div class="quiz-options">${q.options.map((text,i)=>{const cls=reveal?(i===q.answer?'correct':i===s.chosen?'incorrect':''):'';return `<button class="quiz-option ${cls}" data-action="answer" data-index="${i}" ${reveal?'disabled':''}><span class="number">${i+1}</span><span>${esc(text)}</span>${reveal&&i===q.answer?`<span style="margin-left:auto;color:var(--mint)">${ic('check',17)}</span>`:''}</button>`;}).join('')}</div>${reveal?`<div class="explain-box ${s.chosen===q.answer?'':'bad'}"><strong>${s.chosen===q.answer?'✓ 정답이야!':'✗ 이 부분은 다시 확인하자.'}</strong><p><b>정답: ${q.answer+1}번 · ${esc(q.options[q.answer])}</b></p><p>${esc(q.explain)}</p><span class="small muted">출처: 비상교육 한국사2 교과서 p.${esc(q.page)}</span></div>`:''}<div class="answer-area"><span class="muted small">${reveal?'핵심을 이해했다면 다음 문제로':'정답을 선택하면 자동 채점'}</span>${reveal?`<button class="btn primary" data-action="quiz-next">${s.at+1===s.items.length?'결과 확인':'다음 문제'} ${ic('arrow',16)}</button>`:`<span class="muted small">키보드: 숫자 1~5</span>`}</div></div></div>`;}
+if(s.finished){const pct=Math.round(s.correct/s.items.length*100);const misses=s.answers.filter(a=>!a.correct).map(a=>({...a,q:questionMap[a.id]}));app.innerHTML=pageHead('SESSION COMPLETE','시험 결과','수고했어. 틀린 문항만 다시 보면 점수가 빠르게 올라가.')+`<div class="quiz-stage"><div class="panel"><div class="result-score"><div class="score-ring" style="--score:${pct}%"><strong>${pct}점</strong></div><h2 style="font-size:25px;margin:0">${pct>=90?'완벽에 가까워!':pct>=70?'실력이 쌓이고 있어!':'오답을 연결해 보자!'}</h2><div class="result-label">${s.items.length}문항 중 <b style="color:var(--mint)">${s.correct}문항 정답</b> · ${s.items.length-s.correct}문항 오답</div></div>${accuracyBar(s.correct,s.items.length)}<div class="row-between mt-18"><button class="btn secondary" data-action="quiz-new">다른 시험 보기</button><button class="btn primary" data-action="quiz-retry">${ic('refresh',14)} ${misses.length?'오답 재시험':'다시 풀기'}</button></div>${misses.length?`<hr class="separator"><h3 class="section-title">이번에 틀린 문제 (${misses.length})</h3>${misses.map(a=>`<div class="review-row"><b>${esc(a.q.prompt)}</b><p>정답: <span style="color:var(--mint)">${esc(answerText(a.q))}</span> · 교과서 p.${esc(a.q.page)}</p><p>${esc(a.q.explain)}</p></div>`).join('')}`:''}</div></div>`;return;}
+const q=questionMap[s.items[s.at]],reveal=s.chosen!==null;
+const short=q.format==='short';
+const correct=reveal&&s.answers.at(-1).correct;
+const choices=short?`<form data-quiz-short class="filter-bar"><label for="quizYear">연도</label><input id="quizYear" name="year" class="search" inputmode="numeric" maxlength="12" value="${esc(reveal?s.chosen:state.quizDraft||'')}" ${reveal?'disabled':'required'}>${reveal?'':'<button class="btn primary" type="submit">제출</button>'}</form>`:
+  `<div class="quiz-options">${q.options.map((text,i)=>`<button class="quiz-option ${reveal?(i===q.answer?'correct':i===s.chosen?'incorrect':''):''}" data-action="answer" data-index="${i}" ${reveal?'disabled':''}><span class="number">${i+1}</span><span>${esc(text)}</span></button>`).join('')}</div>`;
+app.innerHTML=pageHead('FOCUSED PRACTICE','실전 문제풀이',`${s.items.length}문항 · 답을 제출하면 해설을 볼 수 있어.`,'<button class="btn small ghost" data-action="quiz-exit">시험 중단</button>')+
+  `<div class="quiz-stage"><div class="panel">
+    <div class="quiz-meta"><span><span class="pill">${esc(q.kind)}</span> <span class="pill">${difficultyLabel[q.difficulty]}</span> <span class="pill">교과서 p.${esc(q.page)}</span></span><b class="mono">${s.at+1} / ${s.items.length}</b></div>
+    ${accuracyBar(s.at,s.items.length)}
+    <h2 class="quiz-question">${esc(q.prompt)}</h2>${choices}
+    ${reveal?`<div class="explain-box ${correct?'':'bad'}"><strong>${correct?'✓ 정답이야!':'✗ 다시 확인해 보자.'}</strong><p><b>정답 · ${esc(answerText(q))}</b></p><p>${esc(q.explain)}</p><span class="small muted">비상교육 한국사2 교과서 p.${esc(q.page)}</span></div>
+    <div class="answer-area"><button class="btn primary" data-action="quiz-next">${s.at+1===s.items.length?'결과 확인':'다음 문제'}</button></div>`:''}
+  </div></div>`;}
 function getOrderPool(){const day=activeDay();let pool=DATA.events.filter(e=>{if(e.world)return state.orderScope==='world';if(state.orderScope==='day')return isDayCard(e,day)&&e.year>=1945;if(state.orderScope==='all')return e.year>=1945;if(state.orderScope==='world')return false;return e.unit===state.orderScope;});return pool;}
 function generateOrder(){const distinct=[];
 for(const event of shuffle(getOrderPool())){
@@ -90,19 +246,184 @@ for(const event of shuffle(getOrderPool())){
 }
 state.orderList=shuffle(distinct).map(e=>e.id);state.orderChecked=false;state.orderResult='';}
 function moveOrder(i,d){const j=i+d;if(j<0||j>=state.orderList.length||state.orderChecked)return;[state.orderList[i],state.orderList[j]]=[state.orderList[j],state.orderList[i]];renderOrder();}
-function checkOrder(){const events=state.orderList.map(id=>eventById[id]);const correct=[...events].sort((a,b)=>a.sort-b.sort);state.orderChecked=true;state.orderResult=correct.map(e=>e.id).every((id,i)=>events[i].id===id)?'win':'fail';if(state.orderResult==='win'){db.orderWins++;save();toast('정확한 시간 순서야!');}renderOrder();}
-function renderOrder(){if(!state.orderList.length)generateOrder();const sorted=[...state.orderList].sort((a,b)=>eventById[a].sort-eventById[b].sort);app.innerHTML=pageHead('CHRONOLOGY CHALLENGE','사건 순서 배열','사건 카드를 ▲ ▼ 버튼으로 움직여 가장 이른 사건부터 정렬해 봐. 같은 연도의 사건은 함께 뽑지 않아.')+`<div class="quiz-stage"><div class="panel"><div class="row-between"><div><div class="eyebrow">TIMELINE PUZZLE</div><h2 class="section-title">오래된 순서 → 최근 순서</h2></div><select class="select" data-change="order-scope" aria-label="순서 문제 범위"><option value="day">DAY ${activeDay()} 범위</option><option value="all">전 범위 (1945~)</option><option value="world">부록 세계사</option>${DATA.units.filter(u=>u.id!=='world').map(u=>`<option value="${u.id}">${u.short}</option>`).join('')}</select></div><div class="order-list">${state.orderList.map((id,i)=>{const e=eventById[id];return `<div class="order-item ${state.orderChecked?(sorted[i]===id?'win':'fail'):''}" draggable="${!state.orderChecked}" data-orderid="${esc(id)}" data-idx="${i}"><span class="order-handle">⠿</span><span class="order-title">${esc(e.title)}${state.orderChecked?`<div class="small muted">${esc(e.date)}</div>`:''}</span><span class="order-actions"><button class="mini-icon" data-action="order-up" data-index="${i}" ${state.orderChecked||i===0?'disabled':''} aria-label="위로 이동">↑</button><button class="mini-icon" data-action="order-down" data-index="${i}" ${state.orderChecked||i===state.orderList.length-1?'disabled':''} aria-label="아래로 이동">↓</button></span></div>`;}).join('')}</div>${state.orderChecked?`<div class="order-result"><b style="color:${state.orderResult==='win'?'var(--mint)':'var(--orange)'}">${state.orderResult==='win'?'✓ 모두 맞았어!':'아직 순서가 달라. 정답 흐름을 확인해 봐.'}</b><p>${sorted.map(id=>`${eventById[id].date} ${eventById[id].title}`).join(' → ')}</p></div><button class="btn primary full mt-18" data-action="order-new">새로운 순서 문제 ${ic('refresh',16)}</button>`:`<div class="row-between"><span class="muted small">정답까지 연도를 가렸어 · 정답 기록 ${db.orderWins}회</span><button class="btn primary" data-action="order-check">정답 확인 ${ic('check',16)}</button></div><button class="btn ghost small mt-18" data-action="order-new">${ic('refresh',14)} 다른 문제로 바꾸기</button>`}</div></div>`;const select=app.querySelector('[data-change="order-scope"]');select.value=state.orderScope;initDrag();}
-function initDrag(){let dragging=null;app.querySelectorAll('[data-orderid]').forEach(el=>{el.addEventListener('dragstart',evt=>{if(state.orderChecked)return;dragging=Number(el.dataset.idx);evt.dataTransfer.effectAllowed='move';});el.addEventListener('dragover',evt=>{if(!state.orderChecked)evt.preventDefault();});el.addEventListener('drop',evt=>{evt.preventDefault();if(dragging===null)return;let to=Number(el.dataset.idx);let moved=state.orderList.splice(dragging,1)[0];state.orderList.splice(to,0,moved);dragging=null;renderOrder();});});}
-function renderStats(){const info=statsInfo(),sessions=db.sessions||[];let byUnit=DATA.units.map(u=>{let attempts=db.answers.filter(a=>a.type==='quiz' && questionMap[a.id]?.unit===u.id);return {...u,n:attempts.length,right:attempts.filter(a=>a.correct).length};});app.innerHTML=pageHead('YOUR LEARNING DATA','학습 기록','학습 진도는 이 브라우저에 저장돼. 다른 기기로 옮길 때는 JSON 내보내기를 이용해.')+`<div class="stats-grid"><div class="metric"><span class="meta">누적 풀이</span><strong>${fmt(info.total)}</strong><div class="sub">암기 복습 + 시험 응답</div></div><div class="metric"><span class="meta">전체 정답률</span><strong>${info.rate}%</strong><div class="sub">정답 ${info.hit}회</div></div><div class="metric"><span class="meta">복습한 카드</span><strong>${info.reviewed}</strong><div class="sub">전체 ${DATA.events.length}개</div></div><div class="metric"><span class="meta">순서 배열 성공</span><strong>${db.orderWins}</strong><div class="sub">완벽 정렬 횟수</div></div></div><div class="two-col"><section class="panel"><h2 class="section-title">단원별 문제 정확도</h2><p class="small muted">어느 시대가 취약한지 먼저 보고 복습하면 좋아.</p>${byUnit.map(u=>`<div style="margin:17px 0"><div class="row-between"><b style="font-size:12px">${esc(u.short)}</b><span class="muted small">${u.n?Math.round(u.right/u.n*100):0}% · ${u.n}문항</span></div>${accuracyBar(u.right,u.n)}</div>`).join('')}</section><section class="panel"><h2 class="section-title">모의고사 기록</h2>${sessions.length?`<table class="history-table"><thead><tr><th>날짜</th><th>점수</th><th>문항</th></tr></thead><tbody>${sessions.slice(0,9).map(x=>`<tr><td>${esc(x.date)}</td><td style="color:var(--mint)">${Math.round(x.score/x.total*100)}점</td><td>${x.score}/${x.total}</td></tr>`).join('')}</tbody></table>`:'<div class="empty"><h3>아직 모의고사 기록이 없어</h3>문제풀이를 시작하면 여기에 남아.</div>'}<hr class="separator"><h3 class="section-title">학습 데이터 관리</h3><div class="card-nav mt-18"><button class="btn small secondary" data-action="export">기록 내보내기</button><button class="btn small secondary" data-action="import">기록 불러오기</button><button class="btn small danger" data-action="reset">전체 초기화</button></div><p class="unit-note">개인정보나 계정이 필요 없고, 학습 기록은 브라우저 저장소에 보관돼.</p></section></div>`;}
-function exportData(){const blob=new Blob([JSON.stringify({app:'시대연결',version:1,exported:todayISO(),progress:db},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`한국사_학습기록_${todayISO()}.json`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('학습 기록 파일을 저장했어.');}
-function importData(file){if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const o=JSON.parse(reader.result);if(!o||!o.progress||!Array.isArray(o.progress.answers)||typeof o.progress.srs!=='object')throw Error('invalid');if(!window.confirm('현재 기기의 학습 기록을 불러온 기록으로 교체할까?'))return;db={...defaultDB(),...o.progress};save();resetFlash(false);state.quiz=null;render();toast('학습 기록을 불러왔어.');}catch(err){toast('올바른 학습 기록 JSON 파일이 아니야.');}};reader.readAsText(file);}
-function handleAction(action,el){switch(action){case 'nav':navigate(el.dataset.tab);break;case 'day':db.day=Number(el.dataset.day);save();resetFlash(false);generateOrder();render();toast(`DAY ${db.day} 범위로 변경했어.`);break;case 'flash-reset':resetFlash();break;case 'flip':state.flashFlipped=!state.flashFlipped;renderCards();break;case 'rate':rateFlash(el.dataset.rate);break;case 'flash-skip':state.flashAt++;state.flashFlipped=false;renderCards();break;case 'quiz-scope':state.quizSetupScope=el.dataset.scope;renderQuiz();break;case 'quiz-start':startQuiz();break;case 'quiz-exit':state.quiz=null;renderQuiz();break;case 'quiz-new':state.quiz=null;renderQuiz();break;case 'quiz-retry':{if(!state.quiz?.finished)break;const misses=state.quiz.answers.filter(a=>!a.correct).map(a=>a.id);beginQuiz(misses.length?misses:state.quiz.items);break;}case 'answer':submitAnswer(Number(el.dataset.index));break;case 'quiz-next':nextQuiz();break;case 'order-up':moveOrder(Number(el.dataset.index),-1);break;case 'order-down':moveOrder(Number(el.dataset.index),1);break;case 'order-check':checkOrder();break;case 'order-new':generateOrder();renderOrder();break;case 'export':exportData();break;case 'import':$('#importProgress').click();break;case 'reset':if(window.confirm('모든 학습 기록(카드·문제·성적)을 초기화할까? 되돌릴 수 없어.')){db=defaultDB();save();state.quiz=null;resetFlash(false);render();toast('학습 기록을 초기화했어.');}break;}}
-document.addEventListener('click',evt=>{const el=evt.target.closest('[data-action]');if(el&&!el.disabled){handleAction(el.dataset.action,el);}});
-document.addEventListener('change',evt=>{const el=evt.target,change=el.dataset.change;if(!change)return;switch(change){case 'timeline-unit':state.timelineUnit=el.value;renderTimeline();break;case 'timeline-type':state.timelineType=el.value;renderTimeline();break;case 'timeline-world':state.includeWorld=el.checked;renderTimeline();break;case 'timeline-old':state.includeOld=el.checked;renderTimeline();break;case 'flash-scope':state.flashScope=el.value;resetFlash();break;case 'quiz-scope':state.quizSetupScope=el.value;renderQuiz();break;case 'quiz-difficulty':state.quizDifficulty=el.value;renderQuiz();break;case 'quiz-kind':state.quizKind=el.value;renderQuiz();break;case 'quiz-length':state.quizLength=Number(el.value);renderQuiz();break;case 'order-scope':state.orderScope=el.value;generateOrder();renderOrder();break;}});
-document.addEventListener('input',evt=>{if(evt.target.dataset.input==='timeline-search'){state.query=evt.target.value;renderTimeline(true);}});
-document.addEventListener('keydown',evt=>{if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;if(state.tab==='cards'){if(evt.code==='Space'){evt.preventDefault();state.flashFlipped=!state.flashFlipped;renderCards();}else if(state.flashFlipped&&['Digit1','Digit2','Digit3','Digit4'].includes(evt.code)){rateFlash({Digit1:'again',Digit2:'hard',Digit3:'good',Digit4:'easy'}[evt.code]);}}else if(state.tab==='quiz'&&state.quiz&&!state.quiz.finished){if(state.quiz.chosen===null&&['Digit1','Digit2','Digit3','Digit4','Digit5'].includes(evt.code))submitAnswer(Number(evt.code.slice(-1))-1);else if(state.quiz.chosen!==null&&evt.code==='Enter')nextQuiz();}});
+function checkOrder(){if(state.orderChecked||state.orderList.length<2)return;const events=state.orderList.map(id=>eventById[id]);const correct=[...events].sort((a,b)=>a.sort-b.sort);state.orderChecked=true;state.orderResult=correct.map(e=>e.id).every((id,i)=>events[i].id===id)?'win':'fail';db.orderAttempts.push({correct:state.orderResult==='win',ids:[...state.orderList],date:todayISO(),time:Date.now()});save(true);if(state.orderResult==='win'){db.orderWins++;save();toast('정확한 시간 순서야!');}renderOrder();}
+function renderOrder(){if(!state.orderList.length)generateOrder();const sorted=[...state.orderList].sort((a,b)=>eventById[a].sort-eventById[b].sort);app.innerHTML=pageHead('CHRONOLOGY CHALLENGE','사건 순서 배열','손잡이를 끌어서 가장 이른 사건부터 정렬해 봐. 키보드는 손잡이에 초점을 두고 ↑↓를 눌러 줘. 같은 연도의 사건은 함께 뽑지 않아.')+`<div class="quiz-stage"><div class="panel"><div class="row-between"><div><div class="eyebrow">TIMELINE PUZZLE</div><h2 class="section-title">오래된 순서 → 최근 순서</h2></div><select class="select" data-change="order-scope" aria-label="순서 문제 범위"><option value="day">DAY ${activeDay()} 범위</option><option value="all">전 범위 (1945~)</option><option value="world">부록 세계사</option>${DATA.units.filter(u=>u.id!=='world').map(u=>`<option value="${u.id}">${u.short}</option>`).join('')}</select></div><div class="order-list">${state.orderList.map((id,i)=>{const e=eventById[id];return `<div class="order-item ${state.orderChecked?(sorted[i]===id?'win':'fail'):''}" data-orderid="${esc(id)}" data-idx="${i}"><button class="order-handle" type="button" aria-label="${esc(e.title)} 순서 이동" ${state.orderChecked?'disabled':''}>⠿</button><span class="order-title">${esc(e.title)}${state.orderChecked?`<div class="small muted">${esc(e.date)}</div>`:''}</span><span class="order-actions"><button class="mini-icon" data-action="order-up" data-index="${i}" ${state.orderChecked||i===0?'disabled':''} aria-label="위로 이동">↑</button><button class="mini-icon" data-action="order-down" data-index="${i}" ${state.orderChecked||i===state.orderList.length-1?'disabled':''} aria-label="아래로 이동">↓</button></span></div>`;}).join('')}</div>${state.orderChecked?`<div class="order-result"><b style="color:${state.orderResult==='win'?'var(--mint)':'var(--orange)'}">${state.orderResult==='win'?'✓ 모두 맞았어!':'아직 순서가 달라. 강조된 카드의 연도를 비교해 봐.'}</b><p>${sorted.map(id=>`${esc(eventById[id].date)} ${esc(eventById[id].title)} (p.${esc(eventById[id].pages)})`).join(' → ')}</p></div><button class="btn primary full mt-18" data-action="order-new">새로운 순서 문제 ${ic('refresh',16)}</button>`:`<div class="row-between"><span class="muted small">정답까지 연도를 가렸어 · 정답 기록 ${db.orderWins}회</span><button class="btn primary" data-action="order-check" ${state.orderList.length<2?'disabled':''}>정답 확인 ${ic('check',16)}</button></div><button class="btn ghost small mt-18" data-action="order-new">${ic('refresh',14)} 다른 문제로 바꾸기</button>`}</div></div>`;const select=app.querySelector('[data-change="order-scope"]');select.value=state.orderScope;initDrag();}
+function initDrag(){
+  if(state.orderChecked)return;
+  const rows=[...app.querySelectorAll('[data-orderid]')];
+  for(const [from,row] of rows.entries()){
+    const handle=row.querySelector('.order-handle');
+    let drag=null;
+    handle.addEventListener('pointerdown',evt=>{
+      if(!evt.isPrimary||evt.button!==0)return;
+      drag={id:evt.pointerId,to:from,origin:evt.clientY};
+      handle.setPointerCapture(evt.pointerId);
+      row.classList.add('dragging');
+    });
+    handle.addEventListener('pointermove',evt=>{
+      if(drag?.id!==evt.pointerId)return;
+      const bounds=rows.map((item,i)=>item.getBoundingClientRect().top-(i===from?Number(row.dataset.shift||0):0));
+      const to=rows.findIndex((item,i)=>evt.clientY<bounds[i]+item.offsetHeight);
+      drag.to=to<0?rows.length-1:to;
+      rows.forEach((item,i)=>{
+        item.classList.toggle('order-target',i===drag.to&&i!==from);
+      });
+      row.dataset.shift=evt.clientY-drag.origin;
+      row.style.transform=`translateY(${row.dataset.shift}px)`;
+    });
+    const finish=(evt,commit)=>{
+      if(drag?.id!==evt.pointerId)return;
+      const {to}=drag;
+      drag=null;
+      row.classList.remove('dragging');
+      row.style.transform='';
+      delete row.dataset.shift;
+      rows.forEach(item=>item.classList.remove('order-target'));
+      if(!commit||to===from)return;
+      const [item]=state.orderList.splice(from,1);
+      state.orderList.splice(to,0,item);
+      save();
+      renderOrder();
+      app.querySelectorAll('.order-handle')[to]?.focus({preventScroll:true});
+    };
+    handle.addEventListener('pointerup',evt=>finish(evt,true));
+    handle.addEventListener('pointercancel',evt=>finish(evt,false));
+    handle.addEventListener('lostpointercapture',evt=>finish(evt,false));
+    handle.addEventListener('keydown',evt=>{
+      if(!['ArrowUp','ArrowDown'].includes(evt.key))return;
+      evt.preventDefault();
+      const delta=evt.key==='ArrowUp'?-1:1;
+      moveOrder(from,delta);
+      app.querySelectorAll('.order-handle')[clamp(from+delta,0,rows.length-1)]?.focus({preventScroll:true});
+      save();
+    });
+  }
+}
+function memoryStats(){
+  const current=Object.values(db.srs).map(record=>record.rating).filter(rating=>ratingLabels[rating]);
+  const known=current.filter(rating=>rating==='known').length;
+  const unsure=current.filter(rating=>rating==='unsure').length;
+  const tested=db.answers.filter(answer=>answer.type==='quiz');
+  const accuracy=tested.length?tested.filter(answer=>answer.correct).length/tested.length:null;
+  const memory=current.length?(known+unsure*0.5)/current.length:null;
+  const rateFor=format=>{
+    const attempts=tested.filter(a=>questionMap[a.id]&&(questionMap[a.id].format||'choice')===format);
+    return attempts.length?Math.round(100*attempts.filter(a=>a.correct).length/attempts.length)+'%':'—';
+  };
+  const mastery=accuracy===null||memory===null?null:Math.round((accuracy*0.7+memory*0.3)*100);
+  const dates=new Set([...db.answers,...db.cardRatings,...db.orderAttempts].map(item=>item.date));
+  let streak=0;
+  const offset=dates.has(todayISO())?0:1;
+  while(dates.has(dateAdd(-streak-offset)))streak++;
+  return {current,known,unsure,memory,mastery,streak,choiceRate:rateFor('choice'),shortRate:rateFor('short'),oxRate:rateFor('ox')};
+}
+function learningSummary(){
+  const {current,known,unsure,memory,mastery,streak,choiceRate,shortRate,oxRate}=memoryStats();
+  const reviewed=DATA.events.filter(event=>db.srs[event.id]?.seen);
+  const misses=new Map();
+  for(const answer of db.answers){
+    if(answer.type!=='quiz'||answer.correct)continue;
+    const id=questionMap[answer.id]?.eventId;
+    if(id)misses.set(id,(misses.get(id)||0)+1);
+  }
+  for(const record of db.cardRatings)if(record.rating==='unknown')misses.set(record.id,(misses.get(record.id)||0)+1);
+  const weak=[...misses.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const last=db.lastStudy?esc(db.lastStudy):'기록 없음';
+  const latestQuiz=new Map(db.answers.filter(a=>a.type==='quiz').map(a=>[a.id,a]));
+  const demonstrated=new Set([...latestQuiz.values()].filter(a=>a.correct).map(a=>questionMap[a.id]?.eventId));
+  const ready=DATA.events.filter(event=>db.srs[event.id]?.rating==='known'&&demonstrated.has(event.id)).length;
+  const recent=[
+    ...db.answers.filter(a=>a.type==='quiz').map(a=>({...a,label:a.correct?'문제 정답':'문제 오답',title:questionMap[a.id]?.prompt})),
+    ...db.cardRatings.map(a=>({...a,label:ratingLabels[a.rating],title:eventById[a.id]?.title})),
+    ...db.orderAttempts.map(a=>({...a,label:a.correct?'순서 배열 성공':'순서 배열 오답',title:'사건 순서 배열'}))
+  ].sort((a,b)=>(b.time||0)-(a.time||0)).slice(0,5);
+  return `<section class="panel study-summary"><h2 class="section-title">나의 학습 상태</h2><div class="stats-grid">
+    <div class="metric"><span class="meta">카드 기억 점수</span><strong>${memory===null?'—':Math.round(memory*100)+'%'}</strong><div class="sub">알고 있음 ${known} · 헷갈림 ${unsure} · 모름 ${current.length-known-unsure}</div></div>
+    <div class="metric"><span class="meta">종합 숙련도</span><strong>${mastery===null?'—':mastery+'%'}</strong><div class="sub">문제 정답률 70% + 카드 기억 점수 30%</div></div>
+    <div class="metric"><span class="meta">연속 학습</span><strong>${streak}일</strong><div class="sub">최근 학습 ${last}</div></div>
+    <div class="metric"><span class="meta">순서 배열 성공률</span><strong>${db.orderAttempts.length?Math.round(db.orderAttempts.filter(a=>a.correct).length/db.orderAttempts.length*100)+'%':'—'}</strong><div class="sub">신규 기록 ${db.orderAttempts.length}회</div></div>
+    </div>
+    <p class="unit-note">객관식 ${choiceRate} · 단답형 ${shortRate} · OX ${oxRate} · 기억 점수는 알고 있음 1점, 헷갈림 0.5점, 모름 0점의 평균</p><h3 class="section-title">DAY별 카드 학습 진도</h3>
+    ${[1,2,3,4,5].map(day=>{const total=DATA.events.filter(e=>isDayCard(e,day)).length;const count=reviewed.filter(e=>isDayCard(e,day)).length;return `<div class="row-between"><span>DAY ${day}</span><span>${count} / ${total}</span></div>${accuracyBar(count,total)}`;}).join('')}
+    <h3 class="section-title">취약 사건 TOP 5</h3><ul>${weak.length?weak.map(([id,count])=>`<li>${esc(eventById[id]?.title)} · ${count}회</li>`).join(''):'<li>아직 기록이 없어.</li>'}</ul>
+    <h3 class="section-title">시험 준비 완료도</h3><p class="unit-note">${ready} / ${DATA.events.length}개 사건 · 카드를 알고 있다고 평가하고, 연결된 문제의 최근 답을 맞힌 사건</p>${accuracyBar(ready,DATA.events.length)}
+    <h3 class="section-title">최근 학습 기록</h3><ul>${recent.length?recent.map(item=>`<li>${esc(item.date)} · ${esc(item.label)} · ${esc(item.title||'이전 버전 문항')}</li>`).join(''):'<li>아직 기록이 없어.</li>'}</ul>
+    </section>`;
+}
+function renderStats(){const info=statsInfo(),sessions=db.sessions||[];let byUnit=DATA.units.map(u=>{let attempts=db.answers.filter(a=>a.type==='quiz' && questionMap[a.id]?.unit===u.id);return {...u,n:attempts.length,right:attempts.filter(a=>a.correct).length};});app.innerHTML=pageHead('YOUR LEARNING DATA','학습 기록','학습 진도는 이 브라우저에 저장돼. 다른 기기로 옮길 때는 JSON 내보내기를 이용해.')+`<div class="stats-grid"><div class="metric"><span class="meta">누적 풀이</span><strong>${fmt(info.total)}</strong><div class="sub">채점된 시험 응답</div></div><div class="metric"><span class="meta">전체 정답률</span><strong>${info.rate}%</strong><div class="sub">정답 ${info.hit}회</div></div><div class="metric"><span class="meta">복습한 카드</span><strong>${info.reviewed}</strong><div class="sub">전체 ${DATA.events.length}개</div></div><div class="metric"><span class="meta">순서 배열 성공</span><strong>${db.orderWins}</strong><div class="sub">완벽 정렬 횟수</div></div></div><div class="two-col"><section class="panel"><h2 class="section-title">단원별 문제 정확도</h2><p class="small muted">어느 시대가 취약한지 먼저 보고 복습하면 좋아.</p>${byUnit.map(u=>`<div style="margin:17px 0"><div class="row-between"><b style="font-size:12px">${esc(u.short)}</b><span class="muted small">${u.n?Math.round(u.right/u.n*100):0}% · ${u.n}문항</span></div>${accuracyBar(u.right,u.n)}</div>`).join('')}</section><section class="panel"><h2 class="section-title">모의고사 기록</h2>${sessions.length?`<table class="history-table"><thead><tr><th>날짜</th><th>점수</th><th>문항</th></tr></thead><tbody>${sessions.slice(0,9).map(x=>`<tr><td>${esc(x.date)}</td><td style="color:var(--mint)">${Math.round(x.score/x.total*100)}점</td><td>${x.score}/${x.total}</td></tr>`).join('')}</tbody></table>`:'<div class="empty"><h3>아직 모의고사 기록이 없어</h3>문제풀이를 시작하면 여기에 남아.</div>'}<hr class="separator"><h3 class="section-title">학습 데이터 관리</h3><div class="card-nav mt-18"><button class="btn small secondary" data-action="export">기록 내보내기</button><button class="btn small secondary" data-action="import">기록 불러오기</button><button class="btn small danger" data-action="reset">전체 초기화</button></div><p class="unit-note">개인정보나 계정이 필요 없고, 학습 기록은 브라우저 저장소에 보관돼.</p></section></div>`;}
+function exportData(){save();const blob=new Blob([JSON.stringify({app:'시대연결',version:2,exported:todayISO(),progress:db},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`한국사_학습기록_${todayISO()}.json`;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);toast('학습 기록 파일을 저장했어.');}
+function restoreSession(){
+  state={...initialState(),...(db.resume||{})};
+  if(!Array.isArray(state.flashQueue))state.flashQueue=[];
+  if(!Array.isArray(state.flashRated))state.flashRated=[];
+  if(!Array.isArray(state.orderList))state.orderList=[];
+  if(!Array.isArray(db.cardRatings))db.cardRatings=[];
+  if(!Array.isArray(db.orderAttempts))db.orderAttempts=[];
+  if(!tabs.some(tab=>tab.id===state.tab))state.tab='home';
+  if(!state.flashQueue.every(id=>eventById[id])||state.flashAt>=state.flashQueue.length)resetFlash(false);
+  if(!state.orderList.every(id=>eventById[id]))generateOrder();
+  if(state.quiz&&(!Array.isArray(state.quiz.items)||!state.quiz.items[state.quiz.at]||!state.quiz.items.every(id=>questionMap[id])))state.quiz=null;
+}
+function importData(file){if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const o=JSON.parse(reader.result);if(!o||!o.progress||!Array.isArray(o.progress.answers)||(!o.progress.srs||typeof o.progress.srs!=='object'||Array.isArray(o.progress.srs)))throw Error('invalid');if(!window.confirm('현재 기기의 학습 기록을 불러온 기록으로 교체할까?'))return;db={...defaultDB(),...o.progress};restoreSession();save();render();toast('학습 기록을 불러왔어.');}catch(err){toast('올바른 학습 기록 JSON 파일이 아니야.');}};reader.readAsText(file);}
+function handleAction(action,el){switch(action){case 'nav':navigate(el.dataset.tab);break;case 'timeline-day':case 'day':{
+  const selection=el.dataset.day;
+  const day=Number(selection);
+  state.timelineDay=selection;
+  if(action==='timeline-day'&&day>=4){
+    state.includeWorld=true;
+    state.includeOld=true;
+  }
+  if(day&&day!==db.day){
+    db.day=day;
+    if(state.flashScope==='day')resetFlash(false);
+    if(state.orderScope==='day')generateOrder();
+  }
+  render();
+  break;
+}case 'flash-reset':resetFlash();break;case 'flip':flipCard();break;case 'rate':rateFlash(el.dataset.rate);break;case 'flash-prev':moveFlash(-1);break;case 'flash-next':moveFlash(1);break;case 'quiz-scope':state.quizSetupScope=el.dataset.scope;renderQuiz();break;case 'quiz-start':startQuiz();break;case 'quiz-exit':state.quiz=null;renderQuiz();break;case 'quiz-new':state.quiz=null;renderQuiz();break;case 'quiz-retry':{if(!state.quiz?.finished)break;const misses=state.quiz.answers.filter(a=>!a.correct).map(a=>a.id);beginQuiz(misses.length?misses:state.quiz.items);break;}case 'answer':submitAnswer(Number(el.dataset.index));break;case 'quiz-next':nextQuiz();break;case 'order-up':moveOrder(Number(el.dataset.index),-1);break;case 'order-down':moveOrder(Number(el.dataset.index),1);break;case 'order-check':checkOrder();break;case 'order-new':generateOrder();renderOrder();break;case 'export':exportData();break;case 'import':$('#importProgress').click();break;case 'reset':if(window.confirm('모든 학습 기록(카드·문제·성적)을 초기화할까? 되돌릴 수 없어.')){db=defaultDB();restoreSession();save();render();toast('학습 기록을 초기화했어.');}break;}}
+document.addEventListener('click',evt=>{const el=evt.target.closest('[data-action]');if(el&&!el.disabled){handleAction(el.dataset.action,el);save();}});
+document.addEventListener('change',evt=>{const el=evt.target,change=el.dataset.change;if(!change)return;switch(change){case 'timeline-unit':state.timelineUnit=el.value;renderTimeline();break;case 'timeline-type':state.timelineType=el.value;renderTimeline();break;case 'timeline-world':state.includeWorld=el.checked;renderTimeline();break;case 'timeline-old':state.includeOld=el.checked;renderTimeline();break;case 'flash-scope':state.flashScope=el.value;resetFlash();break;case 'flash-mode':state.flashMode=el.value;resetFlash();break;case 'flash-direction':state.flashDirection=el.value;state.flashFlipped=false;renderCards();break;case 'quiz-scope':state.quizSetupScope=el.value;renderQuiz();break;case 'quiz-difficulty':state.quizDifficulty=el.value;renderQuiz();break;case 'quiz-kind':state.quizKind=el.value;renderQuiz();break;case 'quiz-length':state.quizLength=Number(el.value);renderQuiz();break;case 'order-scope':state.orderScope=el.value;generateOrder();renderOrder();break;}save();});
+app.addEventListener('submit',evt=>{
+  if(!evt.target.matches('[data-quiz-short]'))return;
+  evt.preventDefault();
+  submitAnswer(new FormData(evt.target).get('year'));
+});
+document.addEventListener('input',evt=>{if(evt.target.id==='quizYear'){state.quizDraft=evt.target.value;save();return;}if(evt.target.dataset.input==='timeline-search'){state.query=evt.target.value;renderTimeline(true);save();}});
+let swipe=null;
+app.addEventListener('touchstart',evt=>{
+  if(evt.touches.length===1&&evt.target.closest('.flip-card'))swipe={x:evt.touches[0].clientX,y:evt.touches[0].clientY};
+},{passive:true});
+app.addEventListener('touchend',evt=>{
+  if(!swipe)return;
+  const touch=evt.changedTouches[0],dx=touch.clientX-swipe.x,dy=touch.clientY-swipe.y;
+  swipe=null;
+  if(Math.abs(dx)<48||Math.abs(dx)<Math.abs(dy)*1.4)return;
+  if(evt.cancelable)evt.preventDefault();
+  moveFlash(dx<0?1:-1);
+},{passive:true});
+app.addEventListener('touchcancel',()=>{swipe=null;});
+document.addEventListener('keydown',evt=>{
+  if(evt.isComposing||evt.altKey||evt.ctrlKey||evt.metaKey||evt.target.closest?.('input,textarea,select'))return;
+  if(state.tab==='cards'){
+    if(['ArrowLeft','ArrowRight'].includes(evt.key)){
+      evt.preventDefault();
+      moveFlash(evt.key==='ArrowLeft'?-1:1);
+    }else if((evt.code==='Space'||evt.key==='Enter')&&!evt.target.closest?.('button')&&state.flashQueue.length){
+      evt.preventDefault();
+      flipCard();
+      app.querySelector('.flip-card')?.focus({preventScroll:true});
+    }else if(state.flashFlipped&&['Digit1','Digit2','Digit3'].includes(evt.code)){
+      rateFlash(Object.keys(ratingLabels)[Number(evt.code.at(-1))-1]);
+    }
+  }else if(state.tab==='quiz'&&state.quiz&&!state.quiz.finished){
+    if(state.quiz.chosen===null&&questionMap[state.quiz.items[state.quiz.at]].format!=='short'&&['Digit1','Digit2','Digit3','Digit4','Digit5'].includes(evt.code))submitAnswer(Number(evt.code.at(-1))-1);
+    else if(state.quiz.chosen!==null&&evt.key==='Enter'&&!evt.target.closest?.('button'))nextQuiz();
+  }
+  save();
+});
 $('#importProgress').addEventListener('change',evt=>{importData(evt.target.files?.[0]);evt.target.value='';});
 window.__historyStudy={getData:()=>DATA,getProgress:()=>db,quizPool:()=>allQuestions};
+restoreSession();
 render();
 if ('serviceWorker' in navigator && (location.protocol==='https:' || location.hostname==='localhost')) {
   window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
