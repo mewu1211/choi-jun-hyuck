@@ -15,3 +15,9 @@
 .order-item.order-target{outline:2px solid var(--mint);outline-offset:2px}
 .order-handle:focus-visible,.flip-card:focus-visible{outline:2px solid var(--mint);outline-offset:3px}
 @media(max-width:720px){.day-row{flex-wrap:wrap}.day-pill{min-width:55px}.order-actions{display:none}.flash-controls .btn{padding-inline:10px}.filter-bar .select{min-width:0;max-width:100%}}
+
+.study-material{white-space:pre-line;border:1px solid var(--border2);background:var(--panel);border-radius:12px;padding:14px;margin:0 0 16px;line-height:1.7}
+.study-guide-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:14px}
+.study-guide p{margin:10px 0}
+.study-guide p strong{display:block;color:var(--mint)}
+.study-guide-group{margin-bottom:24px}

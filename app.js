@@ -26,6 +26,7 @@ const dateAdd = days => {const d=new Date();d.setDate(d.getDate()+days);return [
 const categories = {politics:'정치·외교',democracy:'민주화·시민',economy:'경제·산업',war:'전쟁·충돌',culture:'사회·문화',world:'부록 세계사'};
 const icons={home:'<path d="M3 10.5 12 3l9 7.5V21H4V10.5"/><path d="M9 21v-7h6v7"/>',timeline:'<path d="M4 6h16M4 12h16M4 18h16"/><path d="M7 4v4M12 10v4M17 16v4"/>',cards:'<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/>',quiz:'<path d="M5 4h14v16H5z"/><path d="m8 10 2 2 4-4M8 16h8"/>',order:'<path d="M4 6h16M4 12h11M4 18h7"/><path d="m16 15 3 3 3-3"/>',stats:'<path d="M4 20V9m5 11V4m5 16v-7m5 7V7"/>',arrow:'<path d="m5 12 14 0m-6-6 6 6-6 6"/>',refresh:'<path d="M3 12a9 9 0 0 1 15.6-6M21 12a9 9 0 0 1-15.6 6"/><path d="M19 2v5h-5M5 22v-5h5"/>',check:'<path d="m4 12 5 5L20 6"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/>',filter:'<path d="M4 6h16M7 12h10m-7 6h4"/>',book:'<path d="M3 5c3-2 6-2 9 0 3-2 6-2 9 0v15c-3-2-6-2-9 0-3-2-6-2-9 0V5zM12 5v15"/>',chevron:'<path d="m9 6 6 6-6 6"/>',trophy:'<path d="M7 4h10v8a5 5 0 0 1-10 0V4zM7 6H4v3a3 3 0 0 0 3 3m10-6h3v3a3 3 0 0 1-3 3M12 17v4M8 21h8"/>',close:'<path d="m5 5 14 14M19 5 5 19"/>'};
 const ic=(name,size=18)=>`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]||icons.book}</svg>`;
+const guideTab={id:'guide',label:'정부·인물 정리',icon:'book'};
 const tabs=[{id:'home',label:'대시보드',icon:'home'},{id:'timeline',label:'연표 탐색',icon:'timeline'},{id:'cards',label:'플래시카드',icon:'cards'},{id:'quiz',label:'문제풀이',icon:'quiz'},{id:'order',label:'순서 배열',icon:'order'},{id:'stats',label:'학습 기록',icon:'stats'}];
 const initialState=()=>({tab:'home',timelineUnit:'all',timelineType:'all',query:'',includeWorld:false,includeOld:false,flashScope:'day',flashQueue:[],flashAt:0,flashFlipped:false,quizSetupScope:'day',quizDifficulty:'all',quizKind:'all',quizLength:10,quiz:null,orderScope:'day',orderList:[],orderChecked:false,orderResult:'',recentFilter:'all',quizDraft:'',timelineDay:'all',flashMode:'sequence',flashDirection:'event',flashRated:[]});
 let state=initialState();
@@ -59,7 +60,84 @@ const shortQuestions=datedEvents.filter(event=>titleYears.get(event.title).size=
   prompt:`${event.title}은(는) 몇 년에 일어났을까?`,
   answer:event.year,explain:`${event.date} — ${event.detail}`,difficulty:1
 }));
-const allQuestions=[...DATA.questions,...questionsDynamic,...shortQuestions];
+const guides=DATA.guides||[];
+const contextQuestions=guides.flatMap(guide=>{
+  const peers=guides.filter(item=>item.id!==guide.id&&item.group===guide.group)
+    .sort((a,b)=>Number(b.unit===guide.unit)-Number(a.unit===guide.unit)||stableRank(guide.id+a.id)-stableRank(guide.id+b.id));
+  const [a,b,c,d]=peers;
+  if(!d)return [];
+  const base={unit:guide.unit,page:guide.page,topic:guide.id,schoolStyle:true};
+  const labels=['ㄱ','ㄴ','ㄷ','ㄹ'];
+  const statements=[
+    {subject:'(가)',item:guide,correct:true},{subject:'(가)',item:b,correct:false},
+    {subject:'(나)',item:c,correct:false},{subject:'(나)',item:a,correct:true}
+  ].sort((left,right)=>stableRank(guide.id+left.item.id+left.subject)-stableRank(guide.id+right.item.id+right.subject));
+  const correctPair=statements.flatMap((statement,index)=>statement.correct?[labels[index]]:[]).join(', ');
+  const pairs=labels.flatMap((label,index)=>labels.slice(index+1).map(other=>label+', '+other));
+  const notes=statements.map((statement,index)=>`${labels[index]}은(는) ${statement.item.name}의 활동이다.`).join(' ');
+  const questions=[
+    {kind:'정책 연결',difficulty:2,prompt:`${guide.name}의 활동으로 알맞은 것은?`,choices:[guide.action,a.action,b.action,c.action,d.action],explain:`${guide.note} 다른 선지는 각각 ${[a,b,c,d].map(item=>item.name).join(', ')}에 해당한다.`},
+    {kind:'자료 추론',difficulty:3,material:guide.clue,prompt:'위 단서에 해당하는 정부 또는 인물의 활동으로 가장 적절한 것은?',choices:[guide.action,a.action,b.action,c.action,d.action],explain:`단서가 가리키는 대상은 ${guide.name}이다. ${guide.note} 다른 선지는 각각 ${[a,b,c,d].map(item=>item.name).join(', ')}의 활동이다.`},
+    {kind:'보기 조합',difficulty:4,material:`(가) ${guide.clue}\n(나) ${a.clue}\n\n${statements.map((statement,index)=>`${labels[index]}. ${statement.subject} — ${statement.item.action}`).join('\n')}`,prompt:'(가)와 (나)에 해당하는 활동을 바르게 연결한 보기만을 고른 것은?',choices:[correctPair,...pairs.filter(pair=>pair!==correctPair).sort((left,right)=>stableRank(guide.id+left)-stableRank(guide.id+right)).slice(0,4)],explain:`(가)는 ${guide.name}, (나)는 ${a.name}이다. ${notes} ${guide.note}`,page:uniq([guide,a,b,c].flatMap(item=>item.page.split(','))).join(',')}
+  ];
+  return questions.map(({choices,...question})=>{
+    const id=`context_${guide.id}_${question.difficulty}`;
+    const options=[...choices].sort((left,right)=>stableRank(id+left)-stableRank(id+right));
+    return {...base,...question,id,options,answer:options.indexOf(choices[0])};
+  });
+});
+const schoolTopics={'전후북한':'actor11','경제개발계획':'actor01'};
+const authoredQuestions=DATA.questions.map(q=>schoolTopics[q.keyword]||q.kind==='자료 해석'
+  ?{...q,schoolStyle:true,topic:schoolTopics[q.keyword]}
+  :q);
+function teacherQuestions(){
+  const evidence=authoredQuestions.filter(q=>q.material).slice(0,5).map(q=>({...q,teacherStyle:true}));
+  const generated=guides.flatMap(guide=>{
+    const peers=guides.filter(peer=>peer.group===guide.group&&peer.id!==guide.id)
+      .sort((a,b)=>Number(b.unit===guide.unit)-Number(a.unit===guide.unit)||stableRank(guide.id+a.id)-stableRank(guide.id+b.id));
+    return peers.slice(0,5).map((other,index)=>{
+      const id=`teacher_${guide.id}_${other.id}`;
+      const third=peers.find(peer=>peer.id!==other.id);
+      const pages=uniq([guide,other,third].flatMap(item=>item.page.split(','))).sort((a,b)=>Number(a)-Number(b)).join(',');
+      const clues=`자료 요약\n(가) ${guide.clue}\n(나) ${other.clue}`;
+      let prompt,material=clues,choices,reason,kind,difficulty;
+      if(index%3===0){
+        kind='주체 추론';
+        difficulty=3;
+        prompt='(가)와 (나)에 해당하는 주체를 순서대로 고른 것은?';
+        choices=[`${guide.name} / ${other.name}`,`${other.name} / ${guide.name}`,`${third.name} / ${other.name}`,`${guide.name} / ${third.name}`,`${other.name} / ${third.name}`];
+        reason=`(가)는 ${guide.name}, (나)는 ${other.name}이다. ${guide.note} ${other.note}`;
+      }else if(index%3===1){
+        kind='정책 비교';
+        difficulty=4;
+        prompt='두 자료를 바탕으로 (가)와 (나)의 활동을 바르게 연결한 것은?';
+        const pair=(left,right)=>`(가) ${left.action} / (나) ${right.action}`;
+        choices=[pair(guide,other),pair(other,guide),pair(third,other),pair(guide,third),pair(other,third)];
+        reason=`(가)는 ${guide.name}, (나)는 ${other.name}이다. ${guide.note} ${other.note} ${third.action}은(는) ${third.name}과(와) 연결된다.`;
+      }else{
+        kind='복합 보기';
+        difficulty=4;
+        prompt='자료 속 주체와 활동을 바르게 연결한 보기만 고른 것은?';
+        const labels=['ㄱ','ㄴ','ㄷ','ㄹ'];
+        const statements=[
+          ['(가)',guide,true],['(나)',other,true],['(가)',other,false],['(나)',third,false]
+        ].sort(([a,x],[b,y])=>stableRank(id+a+x.id)-stableRank(id+b+y.id));
+        material+=`\n\n〈보기〉\n${statements.map(([subject,person],i)=>`${labels[i]}. ${subject} — ${person.action}`).join('\n')}`;
+        const correct=statements.flatMap((statement,i)=>statement[2]?[labels[i]]:[]).join(', ');
+        const distractors=labels.flatMap((label,i)=>labels.slice(i+1).map(next=>label+', '+next))
+          .filter(pair=>pair!==correct).sort((a,b)=>stableRank(id+a)-stableRank(id+b)).slice(0,4);
+        choices=[correct,...distractors];
+        reason=`(가)는 ${guide.name}, (나)는 ${other.name}이다. ${statements.map(([,person],i)=>`${labels[i]}은(는) ${person.name}의 활동이다.`).join(' ')}`;
+      }
+      const options=[...choices].sort((a,b)=>stableRank(id+a)-stableRank(id+b));
+      return {id,kind,difficulty,unit:guide.unit,page:pages,material,prompt,options,answer:options.indexOf(choices[0]),explain:reason,topic:guide.id,teacherStyle:true};
+    });
+  });
+  return [...evidence,...generated].slice(0,100);
+}
+const teacherBank=teacherQuestions();
+const sourceQuestionIds=new Set(authoredQuestions.map(q=>q.id));
+const allQuestions=[...authoredQuestions,...questionsDynamic,...shortQuestions,...contextQuestions,...teacherBank.filter(q=>!sourceQuestionIds.has(q.id))];
 const difficultyLabel=['','쉬움','보통','어려움','최상위'];
 const answerText=q=>q.format==='short'?q.answer+'년':q.options[q.answer];
 const questionMap=Object.fromEntries(allQuestions.map(q=>[q.id,q]));
@@ -89,19 +167,32 @@ const dayPages={1:'교과서 76–95쪽',2:'96–109쪽',3:'110–125쪽',4:'126
 const activeDay=()=>clamp(Number(db.day)||1,1,5);
 const unitForCard=(e)=>e.world?'부록 세계사':(DATA.units.find(u=>u.id===e.unit)?.short||'부록 한국사');
 function navigate(tab){state.tab=tab; if(tab==='cards'&&!state.flashQueue.length)resetFlash(false); if(tab==='order'&&!state.orderList.length)generateOrder(); if(tab==='quiz'&&state.quiz?.finished)state.quiz=null;render();window.scrollTo(0,0);}
-function renderNav(){const html=tabs.map(t=>`<button class="nav-button ${state.tab===t.id?'active':''}" type="button" data-action="nav" data-tab="${t.id}" aria-current="${state.tab===t.id?'page':'false'}">${ic(t.icon)}<span>${t.label}</span></button>`).join('');$('#sideNav').innerHTML=html;$('#mobileNav').innerHTML=tabs.map(t=>`<button class="${state.tab===t.id?'active':''}" type="button" data-action="nav" data-tab="${t.id}">${ic(t.icon)}<span>${t.label.replace(' 연표','')}</span></button>`).join('');$('#crumb').textContent=tabs.find(t=>t.id===state.tab)?.label||'대시보드';}
-function render(){renderNav();switch(state.tab){case 'home':renderHome();app.insertAdjacentHTML('beforeend',learningSummary());break;case 'timeline':renderTimeline();break;case 'cards':renderCards();break;case 'quiz':renderQuiz();break;case 'order':renderOrder();break;case 'stats':renderStats();app.insertAdjacentHTML('beforeend',learningSummary());break;}}
+function renderNav(){const html=tabs.map(t=>`<button class="nav-button ${state.tab===t.id?'active':''}" type="button" data-action="nav" data-tab="${t.id}" aria-current="${state.tab===t.id?'page':'false'}">${ic(t.icon)}<span>${t.label}</span></button>`).join('');$('#sideNav').innerHTML=html+`<button class="nav-button ${state.tab==='guide'?'active':''}" data-action="nav" data-tab="guide">${ic('book')}<span>${guideTab.label}</span></button>`;$('#mobileNav').innerHTML=tabs.map(t=>`<button class="${state.tab===t.id?'active':''}" type="button" data-action="nav" data-tab="${t.id}">${ic(t.icon)}<span>${t.label.replace(' 연표','')}</span></button>`).join('');$('#crumb').textContent=[...tabs,guideTab].find(t=>t.id===state.tab)?.label||'대시보드';}
+function render(){renderNav();switch(state.tab){case 'home':renderHome();app.insertAdjacentHTML('beforeend',learningSummary());break;case 'timeline':renderTimeline();break;case 'guide':renderGuide();break;case 'cards':renderCards();break;case 'quiz':renderQuiz();break;case 'order':renderOrder();break;case 'stats':renderStats();app.insertAdjacentHTML('beforeend',learningSummary());break;}}
 function renderHome(){let info=statsInfo(),day=activeDay();let dailyAnswers=db.answers.filter(a=>a.date===todayISO()).length;app.innerHTML=`
-<div class="hero"><div class="eyebrow">● YOUR 5-DAY MISSION</div><h1>흐름을 이해하면,<br><em>역사가 연결된다.</em></h1><p>비상교육 한국사2 시험 범위만 담은 맞춤형 학습실. 연표를 익히고, 가리고, 문제로 확인하면서 5일 동안 빈틈을 줄여 보자.</p><div class="hero-ctas"><button class="btn primary" data-action="nav" data-tab="cards">${ic('cards',17)} 암기 시작하기</button><button class="btn secondary" data-action="nav" data-tab="quiz">${ic('quiz',17)} 문제 풀기 ${ic('arrow',14)}</button></div></div>
-<div class="stats-grid"><div class="metric"><span class="meta">학습 연표 <span class="circle">◈</span></span><strong>${fmt(DATA.events.length)}<span class="small muted">개</span></strong><div class="sub">본문 + 부록 한국사·세계사</div></div><div class="metric"><span class="meta">문제은행 <span class="circle">✎</span></span><strong>${fmt(allQuestions.length)}<span class="small muted">문항</span></strong><div class="sub">직접 제작 ${DATA.questions.length} + 연표형 자동</div></div><div class="metric"><span class="meta">누적 정답률 <span class="circle">◎</span></span><strong>${info.rate}<span class="small muted">%</span></strong><div class="sub">풀이 ${info.total}회 · 정답 ${info.hit}회</div></div><div class="metric"><span class="meta">복습한 카드 <span class="circle">✦</span></span><strong>${info.reviewed}<span class="small muted">장</span></strong><div class="sub">전체 ${DATA.events.length}장 중</div></div></div>
+<div class="hero"><div class="eyebrow">● YOUR 5-DAY MISSION</div><h1>흐름을 이해하면,<br><em>역사가 연결된다.</em></h1><p>비상교육 한국사2 시험 범위만 담은 맞춤형 학습실. 연표를 익히고, 가리고, 문제로 확인하면서 5일 동안 빈틈을 줄여 보자.</p><div class="hero-ctas"><button class="btn primary" data-action="nav" data-tab="cards">${ic('cards',17)} 암기 시작하기</button><button class="btn secondary" data-action="nav" data-tab="quiz">${ic('quiz',17)} 문제 풀기 ${ic('arrow',14)}</button><button class="btn secondary" data-action="nav" data-tab="guide">정부·인물 정리</button></div></div>
+<div class="stats-grid"><div class="metric"><span class="meta">학습 연표 <span class="circle">◈</span></span><strong>${fmt(DATA.events.length)}<span class="small muted">개</span></strong><div class="sub">본문 + 부록 한국사·세계사</div></div><div class="metric"><span class="meta">문제은행 <span class="circle">✎</span></span><strong>${fmt(allQuestions.length)}<span class="small muted">문항</span></strong><div class="sub">정책 비교 · 자료 추론 · 연표</div></div><div class="metric"><span class="meta">누적 정답률 <span class="circle">◎</span></span><strong>${info.rate}<span class="small muted">%</span></strong><div class="sub">풀이 ${info.total}회 · 정답 ${info.hit}회</div></div><div class="metric"><span class="meta">복습한 카드 <span class="circle">✦</span></span><strong>${info.reviewed}<span class="small muted">장</span></strong><div class="sub">전체 ${DATA.events.length}장 중</div></div></div>
 <div class="two-col"><section class="panel"><div class="row-between"><div><div class="eyebrow">TODAY'S ROUTE</div><h2 class="section-title">DAY ${day} · ${dayTitle[day]}</h2></div><span class="pill p-mint">${dayPages[day]}</span></div><div class="path-list"><button class="path-item" data-action="nav" data-tab="timeline"><span class="path-num">01</span><span class="path-info"><b>개념의 뼈대 잡기</b><span>연표를 펼쳐 사건의 원인·결과 연결하기</span></span><span class="path-arrow">${ic('chevron',17)}</span></button><button class="path-item" data-action="nav" data-tab="cards"><span class="path-num">02</span><span class="path-info"><b>플래시카드로 기억 고정하기</b><span>뒤집고 복습 정도를 평가하면 기록 저장</span></span><span class="path-arrow">${ic('chevron',17)}</span></button><button class="path-item" data-action="nav" data-tab="quiz"><span class="path-num">03</span><span class="path-info"><b>실전 감각으로 완성하기</b><span>사료·비교·함정 선지 5지선다 + 오답 추적</span></span><span class="path-arrow">${ic('chevron',17)}</span></button></div><div class="row-between mt-18"><span class="muted small">오늘 푼 문제 ${dailyAnswers}회</span><span class="muted small">하루 15문제부터</span></div>${accuracyBar(Math.min(dailyAnswers,15),15)}</section>
-<section class="panel"><div class="eyebrow">STUDY SPRINT</div><h2 class="section-title">나의 5일 계획</h2><div class="day-row">${[1,2,3,4,5].map(i=>`<button class="day-pill ${i===day?'active':''}" data-action="day" data-day="${i}">D${i}<small>${['11.20','11.21','11.22','11.23','11.24'][i-1]}</small></button>`).join('')}</div><p class="small muted" style="margin:22px 0 6px">현재 선택한 학습</p><h3 style="margin:0 0 3px">${dayTitle[day]}</h3><div class="small muted">${dayPages[day]} · 진도에 맞춰 플래시카드와 시험 문제 자동 선택</div><div class="divider-line"></div><div class="eyebrow">MEMORY TIP</div><p style="color:#d2e1e8;margin:6px 0 16px">정답을 보기 전에 사건의 <b style="color:var(--mint)">원인 → 과정 → 결과</b>를 말해 보자. '왜?'까지 설명하면 사료형 문제에서 훨씬 강해져.</p><button class="btn ghost full" data-action="nav" data-tab="order">${ic('order',17)} 사건 순서 배열로 도전</button></section></div>
+<section class="panel"><div class="eyebrow">STUDY SPRINT</div><h2 class="section-title">나의 5일 계획</h2><div class="day-row">${[1,2,3,4,5].map(i=>`<button class="day-pill ${i===day?'active':''}" data-action="day" data-day="${i}">D${i}</button>`).join('')}</div><p class="small muted" style="margin:22px 0 6px">현재 선택한 학습</p><h3 style="margin:0 0 3px">${dayTitle[day]}</h3><div class="small muted">${dayPages[day]} · 진도에 맞춰 플래시카드와 시험 문제 자동 선택</div><div class="divider-line"></div><div class="eyebrow">MEMORY TIP</div><p style="color:#d2e1e8;margin:6px 0 16px">정답을 보기 전에 사건의 <b style="color:var(--mint)">원인 → 과정 → 결과</b>를 말해 보자. '왜?'까지 설명하면 사료형 문제에서 훨씬 강해져.</p><button class="btn ghost full" data-action="nav" data-tab="order">${ic('order',17)} 사건 순서 배열로 도전</button></section></div>
 <div class="banner-info">📚 <b>시험 범위만 수록:</b> p.76–127, p.128–133, p.161–163. 부록 p.162–163에 실린 1945년 이전 한국사·세계사 연표는 별도 필터에서 학습할 수 있어.</div>`;}
+function renderGuide(){
+  const cards=group=>guides.filter(guide=>guide.group===group).map(guide=>`
+    <article class="panel study-guide">
+      <h3 class="section-title">${esc(guide.name)}</h3>
+      <p class="muted">${esc(guide.clue)}</p>
+      <p><strong>주요 활동</strong> ${esc(guide.action)}</p>
+      <p><strong>시험에서 구분할 점</strong> ${esc(guide.note)}</p>
+      <small class="muted">교과서 p.${esc(guide.page)}</small>
+    </article>`).join('');
+  app.innerHTML=pageHead('','정부·인물 정리','활동과 정책의 주체를 연결하고, 비슷한 정부나 인물의 차이를 확인해 봐.',
+    '<button class="btn small secondary" data-action="nav" data-tab="timeline">연표로</button>')+
+    ['정부','인물'].map(group=>`<section class="study-guide-group"><h2>${group}별 핵심 정리</h2><div class="study-guide-grid">${cards(group)}</div></section>`).join('');
+}
 function filteredTimeline(){let events=DATA.events.filter(e=>{if(state.timelineDay!=='all'&&!isDayCard(e,Number(state.timelineDay)))return false;if(state.timelineUnit!=='all'&&e.unit!==state.timelineUnit)return false;if(state.timelineUnit==='all'&&e.world&&!state.includeWorld)return false;if(state.timelineUnit==='all'&&!e.world&&e.year<1945&&!state.includeOld)return false;if(state.timelineType!=='all'&&e.cat!==state.timelineType)return false;const q=state.query.trim().toLowerCase();if(q&&!(`${e.title} ${e.detail} ${e.hint} ${e.year}`).toLowerCase().includes(q))return false;return true;});return events.sort((a,b)=>a.sort-b.sort||a.id.localeCompare(b.id));}
 function renderTimeline(resultsOnly=false){const items=filteredTimeline();let marker=null;const cards=items.map(e=>{const decade=Math.floor(e.year/10)*10;let m='';if(marker!==decade){marker=decade;m=`<div class="timeline-year-mark">${decade}s <span style="font-size:11px;font-weight:600;color:var(--faint)">/ 시간의 흐름</span></div>`;}return m+`<div class="timeline-entry kind-${e.cat}"><details class="timeline-card"><summary><span class="timeline-date mono">${esc(e.date)}</span><span class="timeline-main">${esc(e.title)}<small>${categories[e.cat]} · 교과서 p.${esc(e.pages)}</small></span><span class="timeline-chevron">⌄</span></summary><div class="timeline-body">${esc(e.detail)}<br><span class="timeline-memory">🧠 ${esc(e.hint)}</span><div class="unit-note">연결 범위: ${esc(unitForCard(e))}</div></div></details></div>`;}).join('');
 const results=`<div class="row-between"><span class="count-note">총 <b style="color:var(--ink)">${fmt(items.length)}</b>건 · 날짜와 사건을 눌러 자세히 보기</span><span class="count-note">색상은 주제별 분류</span></div><div class="legend">${Object.entries(categories).map(([k,v])=>`<span class="tag kind-${k}"><span class="dot"></span>${v}</span>`).join('')}</div>${items.length?`<div class="timeline-list">${cards}</div>`:'<div class="empty"><h3>표시할 사건이 없어</h3>검색어나 필터를 바꿔 줘.</div>'}`;
 if(resultsOnly){app.querySelector('#timelineResults').innerHTML=results;return;}
-app.innerHTML=pageHead('CHRONOLOGY / SOURCE-BASED','연표 탐색','시험에 나오는 사건을 시간순으로 살펴보고, 사건을 눌러 원인과 기억법을 확인해.',`<button class="btn secondary small" data-action="nav" data-tab="order">${ic('order',16)} 순서 훈련</button>`)+`<div class="panel"><div class="day-row" aria-label="연표 학습일">${['all',1,2,3,4,5].map(day=>`<button class="day-pill ${String(day)===state.timelineDay?'active':''}" aria-pressed="${String(day)===state.timelineDay}" data-action="timeline-day" data-day="${day}">${day==='all'?'전체':'DAY '+day}</button>`).join('')}</div><div class="filter-bar"><select class="select" data-change="timeline-unit" aria-label="단원 선택">${unitOptions()}</select><select class="select" data-change="timeline-type" aria-label="사건 종류"><option value="all">모든 사건 종류</option>${Object.entries(categories).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><input class="search" data-input="timeline-search" placeholder="사건·연도·키워드 검색" value="${esc(state.query)}" aria-label="연표 검색"></div><div class="filter-bar"><label class="check-label"><input type="checkbox" data-change="timeline-world" ${state.includeWorld?'checked':''}> 부록 세계사 포함</label><label class="check-label"><input type="checkbox" data-change="timeline-old" ${state.includeOld?'checked':''}> 1945년 이전 한국사 포함</label></div><div id="timelineResults">${results}</div></div>`;
+app.innerHTML=pageHead('CHRONOLOGY / SOURCE-BASED','연표 탐색','시험에 나오는 사건을 시간순으로 살펴보고, 사건을 눌러 원인과 기억법을 확인해.',`<button class="btn secondary small" data-action="nav" data-tab="order">${ic('order',16)} 순서 훈련</button><button class="btn secondary small" data-action="nav" data-tab="guide">정부·인물 정리</button>`)+`<div class="panel"><div class="day-row" aria-label="연표 학습일">${['all',1,2,3,4,5].map(day=>`<button class="day-pill ${String(day)===state.timelineDay?'active':''}" aria-pressed="${String(day)===state.timelineDay}" data-action="timeline-day" data-day="${day}">${day==='all'?'전체':'DAY '+day}</button>`).join('')}</div><div class="filter-bar"><select class="select" data-change="timeline-unit" aria-label="단원 선택">${unitOptions()}</select><select class="select" data-change="timeline-type" aria-label="사건 종류"><option value="all">모든 사건 종류</option>${Object.entries(categories).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><input class="search" data-input="timeline-search" placeholder="사건·연도·키워드 검색" value="${esc(state.query)}" aria-label="연표 검색"></div><div class="filter-bar"><label class="check-label"><input type="checkbox" data-change="timeline-world" ${state.includeWorld?'checked':''}> 부록 세계사 포함</label><label class="check-label"><input type="checkbox" data-change="timeline-old" ${state.includeOld?'checked':''}> 1945년 이전 한국사 포함</label></div><div id="timelineResults">${results}</div></div>`;
 app.querySelector('[data-change="timeline-unit"]').value=state.timelineUnit;app.querySelector('[data-change="timeline-type"]').value=state.timelineType;}
 const ratingLabels={known:'알고 있음',unsure:'헷갈림',unknown:'모름'};
 function recentQuizMisses(){
@@ -189,18 +280,60 @@ function rateFlash(rating){
   else renderCards();
 }
 function practiceSample(pool,n){
-  const lastAttempts=new Map(db.answers.filter(a=>a.type==='quiz').map(a=>[a.id,a]));
+  const attempts=db.answers.filter(a=>a.type==='quiz');
+  const lastAttempts=new Map(attempts.map(a=>[a.id,a]));
+  const recent=new Set(attempts.slice(-12).map(a=>a.id));
+  const topics=new Map();
+  const topicOf=q=>q?.topic||q?.eventId||q?.unit;
+  for(const [index,attempt] of attempts.slice(-80).entries()){
+    const key=topicOf(questionMap[attempt.id]);
+    if(!key)continue;
+    const weight=0.5+index/160;
+    topics.set(key,Math.max(0,(topics.get(key)||0)+(attempt.correct?-weight:weight)));
+  }
   const weight=q=>{
     const card=db.srs[q.eventId];
-    const attempt=lastAttempts.get(q.id);
-    return (attempt?.correct===false?3:1)*(card?.rating==='unknown'?4:card?.rating==='unsure'?2:card?.rating==='known'&&card.due>todayISO()?0.5:1);
+    const previous=lastAttempts.get(q.id);
+    const weakness=(topics.get(topicOf(q))||0)+(q.topic?0.5*(topics.get(q.unit)||0):0);
+    return (1+Math.min(weakness,4))*(previous?.correct===false?2:1)*(recent.has(q.id)?0.35:1)
+      *(card?.rating==='unknown'?4:card?.rating==='unsure'?2:card?.rating==='known'&&card.due>todayISO()?0.5:1);
   };
   return pool.map(q=>({q,rank:-Math.log(1-Math.random())/weight(q)})).sort((a,b)=>a.rank-b.rank).slice(0,n).map(x=>x.q);
 }
-function selectQuestionPool(){let pool=allQuestions.filter(q=>{const scope=state.quizSetupScope;if(scope==='all')return true;if(scope==='day')return isDayQuestion(q,activeDay());if(scope==='wrong')return wrongIds().includes(q.id);return q.unit===scope;});if(state.quizDifficulty!=='all')pool=pool.filter(q=>q.difficulty===Number(state.quizDifficulty));if(state.quizKind!=='all')pool=pool.filter(q=>q.kind===state.quizKind);return pool;}
-function startQuiz(){const pool=selectQuestionPool();if(!pool.length){toast('선택한 조건에 맞는 문제가 없어.');return;}const count=Math.min(Number(state.quizLength),pool.length);const select=state.quizSetupScope==='day'?practiceSample:sample;
-  let selected=select(pool,count);
-  if(count>1&&selected.every(q=>q.format===selected[0].format)){
+function finalPaper(pool,count){
+  const groups=[2,3,4].map(level=>shuffle(pool.filter(q=>q.difficulty===level)));
+  const selected=[];
+  const usedTopics=new Set();
+  while(selected.length<count&&groups.some(group=>group.length)){
+    for(const group of groups){
+      if(!group.length||selected.length===count)continue;
+      const index=group.findIndex(q=>!usedTopics.has(q.topic||q.id));
+      const [question]=group.splice(Math.max(index,0),1);
+      selected.push(question);
+      usedTopics.add(question.topic||question.id);
+    }
+  }
+  return shuffle(selected);
+}
+function setQuizScope(scope){
+  state.quizSetupScope=scope;
+  if(scope!=='teacher'&&state.quizLength===100)state.quizLength=25;
+  if(scope==='final'||scope==='teacher'){
+    state.quizLength=25;
+    state.quizDifficulty='all';
+    state.quizKind='all';
+  }
+  renderQuiz();
+}
+function selectQuestionPool(){let pool=state.quizSetupScope==='teacher'?[...teacherBank]:allQuestions.filter(q=>{const scope=state.quizSetupScope;if(scope==='all'||scope==='adaptive')return true;if(scope==='final')return q.schoolStyle===true;if(scope==='day')return isDayQuestion(q,activeDay());if(scope==='wrong')return wrongIds().includes(q.id);return q.unit===scope;});if(state.quizDifficulty!=='all')pool=pool.filter(q=>q.difficulty===Number(state.quizDifficulty));if(state.quizKind!=='all')pool=pool.filter(q=>q.kind===state.quizKind);return pool;}
+function startQuiz(){const pool=selectQuestionPool();if(!pool.length){toast('선택한 조건에 맞는 문제가 없어.');return;}const count=Math.min(Number(state.quizLength),pool.length);const select=state.quizSetupScope==='final'?finalPaper:['day','adaptive','teacher'].includes(state.quizSetupScope)?practiceSample:sample;
+  const context=pool.filter(q=>q.kind!=='연표'&&q.kind!=='연도 입력'&&q.format!=='ox');
+  const contextFirst=state.quizKind==='all'&&(state.quizDifficulty!=='all'||['adaptive','teacher'].includes(state.quizSetupScope));
+  const preferred=contextFirst?Math.min(context.length,Math.ceil(count*0.7)):0;
+  const priority=preferred?select(context,preferred):[];
+  const used=new Set(priority.map(q=>q.id));
+  let selected=shuffle([...priority,...select(pool.filter(q=>!used.has(q.id)),count-priority.length)]);
+  if(state.quizSetupScope!=='final'&&count>1&&selected.every(q=>q.format===selected[0].format)){
     const others=pool.filter(q=>q.format!==selected[0].format);
     if(others.length)selected=shuffle([...selected.slice(0,-1),...select(others,1)]);
   }
@@ -222,7 +355,9 @@ function submitAnswer(choice){
 }
 function nextQuiz(){const qstate=state.quiz;if(!qstate||qstate.chosen===null)return;if(qstate.at+1>=qstate.items.length){qstate.finished=true;const summary={date:todayISO(),score:qstate.correct,total:qstate.items.length,seconds:Math.round((Date.now()-qstate.startedAt)/1000),questions:qstate.answers};db.sessions.unshift(summary);db.sessions=db.sessions.slice(0,50);save();}else{qstate.at++;qstate.chosen=null;state.quizDraft='';}renderQuiz();window.scrollTo(0,0);}
 function renderQuiz(){const s=state.quiz;
-if(!s){let pool=selectQuestionPool();app.innerHTML=pageHead('EXAM SIMULATOR','실전 문제풀이','객관식, OX, 연도 입력을 섞어 풀고, 해설에서 교과서 쪽수를 확인해 봐.')+`<div class="quiz-stage"><div class="panel"><div class="eyebrow">STEP 01 / 범위 선택</div><h2 class="section-title">어디부터 도전할까?</h2><div class="preset-grid"><button class="preset-card ${state.quizSetupScope==='day'?'selected':''}" data-action="quiz-scope" data-scope="day">${ic('clock',20)}<b>오늘의 집중 훈련</b><span>DAY ${activeDay()} · ${dayTitle[activeDay()]}</span></button><button class="preset-card ${state.quizSetupScope==='all'?'selected':''}" data-action="quiz-scope" data-scope="all">${ic('trophy',20)}<b>전 범위 모의고사</b><span>한국사 + 개헌 + 부록 연표</span></button><button class="preset-card ${state.quizSetupScope==='wrong'?'selected':''}" data-action="quiz-scope" data-scope="wrong">${ic('refresh',20)}<b>오답만 재도전</b><span>지금까지 틀린 문제만 다시</span></button></div><div class="form-row"><div class="field"><label>교과서 단원 또는 범위</label><select class="select" data-change="quiz-scope"><option value="day">DAY ${activeDay()} 집중 범위</option><option value="all">전 범위</option><option value="wrong">나의 오답</option>${DATA.units.map(u=>`<option value="${u.id}">${u.short} (p.${u.pages})</option>`).join('')}</select></div><div class="field"><label>난이도</label><select class="select" data-change="quiz-difficulty"><option value="all">전체 난이도</option>${difficultyLabel.slice(1).map((label,i)=>`<option value="${i+1}">${label}</option>`).join('')}</select></div><div class="field"><label>문제 유형</label><select class="select" data-change="quiz-kind"><option value="all">전체 유형</option>${uniq(allQuestions.map(q=>q.kind)).map(k=>`<option value="${k}">${k} 문제</option>`).join('')}</select></div><div class="field"><label>문항 수</label><select class="select" data-change="quiz-length"><option value="10">10문항 · 빠른 점검</option><option value="20">20문항 · 단원 테스트</option><option value="30">30문항 · 실전 모의고사</option></select></div></div><div class="banner-info">현재 설정으로 <b>${pool.length}문항</b> 출제 가능 · 오답과 해설은 자동 저장 · 연표형 문제는 교과서 연표 사건에서 생성해.</div><button class="btn primary full" data-action="quiz-start">시험 시작하기 ${ic('arrow',16)}</button></div></div>`;
+if(!s){let pool=selectQuestionPool();app.innerHTML=pageHead('EXAM SIMULATOR','실전 문제풀이','객관식, OX, 연도 입력을 섞어 풀고, 해설에서 교과서 쪽수를 확인해 봐.')+`<div class="quiz-stage"><div class="panel"><div class="eyebrow">STEP 01 / 범위 선택</div><h2 class="section-title">어디부터 도전할까?</h2><div class="preset-grid"><button class="preset-card ${state.quizSetupScope==='day'?'selected':''}" data-action="quiz-scope" data-scope="day">${ic('clock',20)}<b>오늘의 집중 훈련</b><span>DAY ${activeDay()} · ${dayTitle[activeDay()]}</span></button><button class="preset-card ${state.quizSetupScope==='all'?'selected':''}" data-action="quiz-scope" data-scope="all">${ic('trophy',20)}<b>전 범위 모의고사</b><span>한국사 + 개헌 + 부록 연표</span></button><button class="preset-card ${state.quizSetupScope==='wrong'?'selected':''}" data-action="quiz-scope" data-scope="wrong">${ic('refresh',20)}<b>오답만 재도전</b><span>지금까지 틀린 문제만 다시</span></button>
+<button class="preset-card ${state.quizSetupScope==='adaptive'?'selected':''}" data-action="quiz-scope" data-scope="adaptive">${ic('filter',20)}<b>맞춤 출제</b><span>최근 오답과 약한 개념 중심</span></button>
+<button class="preset-card ${state.quizSetupScope==='final'?'selected':''}" data-action="quiz-scope" data-scope="final">${ic('book',20)}<b>미사고 1학년 기말 연습</b><span>교과서 범위 · 기본 25문항</span></button><button class="preset-card ${state.quizSetupScope==='teacher'?'selected':''}" data-action="quiz-scope" data-scope="teacher">${ic('book',20)}<b>강민석 유형 문제들</b><span>100문항 · 자료 추론·정책 비교·복합 보기</span></button></div><div class="form-row"><div class="field"><label>교과서 단원 또는 범위</label><select class="select" data-change="quiz-scope"><option value="day">DAY ${activeDay()} 집중 범위</option><option value="all">전 범위</option><option value="wrong">나의 오답</option><option value="adaptive">맞춤 출제</option><option value="final">미사고 1학년 기말 연습</option><option value="teacher">강민석 유형 문제들</option>${DATA.units.map(u=>`<option value="${u.id}">${u.short} (p.${u.pages})</option>`).join('')}</select></div><div class="field"><label>난이도</label><select class="select" data-change="quiz-difficulty"><option value="all">전체 난이도</option>${difficultyLabel.slice(1).map((label,i)=>`<option value="${i+1}">${label}</option>`).join('')}</select></div><div class="field"><label>문제 유형</label><select class="select" data-change="quiz-kind"><option value="all">전체 유형</option>${uniq(allQuestions.map(q=>q.kind)).map(k=>`<option value="${k}">${k} 문제</option>`).join('')}</select></div><div class="field"><label>문항 수</label><select class="select" data-change="quiz-length"><option value="10">10문항 · 빠른 점검</option><option value="25">25문항 · 지필 연습</option><option value="20">20문항 · 단원 테스트</option><option value="30">30문항 · 실전 모의고사</option>${state.quizSetupScope==='teacher'?'<option value="100">100문항 · 전체 유형</option>':''}</select></div></div><div class="banner-info">${state.quizSetupScope==='adaptive'?'<p class="unit-note">최근 오답이 쌓인 단원·개념과 모름으로 평가한 카드를 우선 반영해. 방금 본 문항의 출제 가능성은 낮춰 줘.</p>':''}${state.quizSetupScope==='final'?'<p class="unit-note">1학기 시험의 출제 형식을 참고한 한국사2 연습이야. 범위는 앱에 지정된 교과서 쪽수를 기준으로 해.</p>':''}현재 설정으로 <b>${pool.length}문항</b> 출제 가능 · 오답과 해설은 자동 저장 · 연표형 문제는 교과서 연표 사건에서 생성해.</div><button class="btn primary full" data-action="quiz-start">시험 시작하기 ${ic('arrow',16)}</button></div></div>`;
 app.querySelector('[data-change="quiz-scope"]').value=state.quizSetupScope;app.querySelector('[data-change="quiz-difficulty"]').value=state.quizDifficulty;app.querySelector('[data-change="quiz-kind"]').value=state.quizKind;app.querySelector('[data-change="quiz-length"]').value=String(state.quizLength);return;}
 if(s.finished){const pct=Math.round(s.correct/s.items.length*100);const misses=s.answers.filter(a=>!a.correct).map(a=>({...a,q:questionMap[a.id]}));app.innerHTML=pageHead('SESSION COMPLETE','시험 결과','수고했어. 틀린 문항만 다시 보면 점수가 빠르게 올라가.')+`<div class="quiz-stage"><div class="panel"><div class="result-score"><div class="score-ring" style="--score:${pct}%"><strong>${pct}점</strong></div><h2 style="font-size:25px;margin:0">${pct>=90?'완벽에 가까워!':pct>=70?'실력이 쌓이고 있어!':'오답을 연결해 보자!'}</h2><div class="result-label">${s.items.length}문항 중 <b style="color:var(--mint)">${s.correct}문항 정답</b> · ${s.items.length-s.correct}문항 오답</div></div>${accuracyBar(s.correct,s.items.length)}<div class="row-between mt-18"><button class="btn secondary" data-action="quiz-new">다른 시험 보기</button><button class="btn primary" data-action="quiz-retry">${ic('refresh',14)} ${misses.length?'오답 재시험':'다시 풀기'}</button></div>${misses.length?`<hr class="separator"><h3 class="section-title">이번에 틀린 문제 (${misses.length})</h3>${misses.map(a=>`<div class="review-row"><b>${esc(a.q.prompt)}</b><p>정답: <span style="color:var(--mint)">${esc(answerText(a.q))}</span> · 교과서 p.${esc(a.q.page)}</p><p>${esc(a.q.explain)}</p></div>`).join('')}`:''}</div></div>`;return;}
 const q=questionMap[s.items[s.at]],reveal=s.chosen!==null;
@@ -234,11 +369,11 @@ app.innerHTML=pageHead('FOCUSED PRACTICE','실전 문제풀이',`${s.items.lengt
   `<div class="quiz-stage"><div class="panel">
     <div class="quiz-meta"><span><span class="pill">${esc(q.kind)}</span> <span class="pill">${difficultyLabel[q.difficulty]}</span> <span class="pill">교과서 p.${esc(q.page)}</span></span><b class="mono">${s.at+1} / ${s.items.length}</b></div>
     ${accuracyBar(s.at,s.items.length)}
-    <h2 class="quiz-question">${esc(q.prompt)}</h2>${choices}
+    <h2 class="quiz-question">${esc(q.prompt)}</h2>${q.material?`<div class="study-material" aria-label="문제 자료">${esc(q.material)}</div>`:''}${choices}
     ${reveal?`<div class="explain-box ${correct?'':'bad'}"><strong>${correct?'✓ 정답이야!':'✗ 다시 확인해 보자.'}</strong><p><b>정답 · ${esc(answerText(q))}</b></p><p>${esc(q.explain)}</p><span class="small muted">비상교육 한국사2 교과서 p.${esc(q.page)}</span></div>
     <div class="answer-area"><button class="btn primary" data-action="quiz-next">${s.at+1===s.items.length?'결과 확인':'다음 문제'}</button></div>`:''}
   </div></div>`;}
-function getOrderPool(){const day=activeDay();let pool=DATA.events.filter(e=>{if(e.world)return state.orderScope==='world';if(state.orderScope==='day')return isDayCard(e,day)&&e.year>=1945;if(state.orderScope==='all')return e.year>=1945;if(state.orderScope==='world')return false;return e.unit===state.orderScope;});return pool;}
+function getOrderPool(){const day=activeDay();let pool=datedEvents.filter(e=>{if(e.world)return state.orderScope==='world';if(state.orderScope==='day')return isDayCard(e,day)&&e.year>=1945;if(state.orderScope==='all')return e.year>=1945;if(state.orderScope==='world')return false;return e.unit===state.orderScope;});return pool;}
 function generateOrder(){const distinct=[];
 for(const event of shuffle(getOrderPool())){
   if(!distinct.some(item=>item.year===event.year))distinct.push(event);
@@ -359,7 +494,7 @@ function restoreSession(){
   if(!Array.isArray(state.orderList))state.orderList=[];
   if(!Array.isArray(db.cardRatings))db.cardRatings=[];
   if(!Array.isArray(db.orderAttempts))db.orderAttempts=[];
-  if(!tabs.some(tab=>tab.id===state.tab))state.tab='home';
+  if(![...tabs,guideTab].some(tab=>tab.id===state.tab))state.tab='home';
   if(!state.flashQueue.every(id=>eventById[id])||state.flashAt>=state.flashQueue.length)resetFlash(false);
   if(!state.orderList.every(id=>eventById[id]))generateOrder();
   if(state.quiz&&(!Array.isArray(state.quiz.items)||!state.quiz.items[state.quiz.at]||!state.quiz.items.every(id=>questionMap[id])))state.quiz=null;
@@ -380,9 +515,9 @@ function handleAction(action,el){switch(action){case 'nav':navigate(el.dataset.t
   }
   render();
   break;
-}case 'flash-reset':resetFlash();break;case 'flip':flipCard();break;case 'rate':rateFlash(el.dataset.rate);break;case 'flash-prev':moveFlash(-1);break;case 'flash-next':moveFlash(1);break;case 'quiz-scope':state.quizSetupScope=el.dataset.scope;renderQuiz();break;case 'quiz-start':startQuiz();break;case 'quiz-exit':state.quiz=null;renderQuiz();break;case 'quiz-new':state.quiz=null;renderQuiz();break;case 'quiz-retry':{if(!state.quiz?.finished)break;const misses=state.quiz.answers.filter(a=>!a.correct).map(a=>a.id);beginQuiz(misses.length?misses:state.quiz.items);break;}case 'answer':submitAnswer(Number(el.dataset.index));break;case 'quiz-next':nextQuiz();break;case 'order-up':moveOrder(Number(el.dataset.index),-1);break;case 'order-down':moveOrder(Number(el.dataset.index),1);break;case 'order-check':checkOrder();break;case 'order-new':generateOrder();renderOrder();break;case 'export':exportData();break;case 'import':$('#importProgress').click();break;case 'reset':if(window.confirm('모든 학습 기록(카드·문제·성적)을 초기화할까? 되돌릴 수 없어.')){db=defaultDB();restoreSession();save();render();toast('학습 기록을 초기화했어.');}break;}}
+}case 'flash-reset':resetFlash();break;case 'flip':flipCard();break;case 'rate':rateFlash(el.dataset.rate);break;case 'flash-prev':moveFlash(-1);break;case 'flash-next':moveFlash(1);break;case 'quiz-scope':setQuizScope(el.dataset.scope);break;case 'quiz-start':startQuiz();break;case 'quiz-exit':state.quiz=null;renderQuiz();break;case 'quiz-new':state.quiz=null;renderQuiz();break;case 'quiz-retry':{if(!state.quiz?.finished)break;const misses=state.quiz.answers.filter(a=>!a.correct).map(a=>a.id);beginQuiz(misses.length?misses:state.quiz.items);break;}case 'answer':submitAnswer(Number(el.dataset.index));break;case 'quiz-next':nextQuiz();break;case 'order-up':moveOrder(Number(el.dataset.index),-1);break;case 'order-down':moveOrder(Number(el.dataset.index),1);break;case 'order-check':checkOrder();break;case 'order-new':generateOrder();renderOrder();break;case 'export':exportData();break;case 'import':$('#importProgress').click();break;case 'reset':if(window.confirm('모든 학습 기록(카드·문제·성적)을 초기화할까? 되돌릴 수 없어.')){db=defaultDB();restoreSession();save();render();toast('학습 기록을 초기화했어.');}break;}}
 document.addEventListener('click',evt=>{const el=evt.target.closest('[data-action]');if(el&&!el.disabled){handleAction(el.dataset.action,el);save();}});
-document.addEventListener('change',evt=>{const el=evt.target,change=el.dataset.change;if(!change)return;switch(change){case 'timeline-unit':state.timelineUnit=el.value;renderTimeline();break;case 'timeline-type':state.timelineType=el.value;renderTimeline();break;case 'timeline-world':state.includeWorld=el.checked;renderTimeline();break;case 'timeline-old':state.includeOld=el.checked;renderTimeline();break;case 'flash-scope':state.flashScope=el.value;resetFlash();break;case 'flash-mode':state.flashMode=el.value;resetFlash();break;case 'flash-direction':state.flashDirection=el.value;state.flashFlipped=false;renderCards();break;case 'quiz-scope':state.quizSetupScope=el.value;renderQuiz();break;case 'quiz-difficulty':state.quizDifficulty=el.value;renderQuiz();break;case 'quiz-kind':state.quizKind=el.value;renderQuiz();break;case 'quiz-length':state.quizLength=Number(el.value);renderQuiz();break;case 'order-scope':state.orderScope=el.value;generateOrder();renderOrder();break;}save();});
+document.addEventListener('change',evt=>{const el=evt.target,change=el.dataset.change;if(!change)return;switch(change){case 'timeline-unit':state.timelineUnit=el.value;renderTimeline();break;case 'timeline-type':state.timelineType=el.value;renderTimeline();break;case 'timeline-world':state.includeWorld=el.checked;renderTimeline();break;case 'timeline-old':state.includeOld=el.checked;renderTimeline();break;case 'flash-scope':state.flashScope=el.value;resetFlash();break;case 'flash-mode':state.flashMode=el.value;resetFlash();break;case 'flash-direction':state.flashDirection=el.value;state.flashFlipped=false;renderCards();break;case 'quiz-scope':setQuizScope(el.value);break;case 'quiz-difficulty':state.quizDifficulty=el.value;renderQuiz();break;case 'quiz-kind':state.quizKind=el.value;renderQuiz();break;case 'quiz-length':state.quizLength=Number(el.value);renderQuiz();break;case 'order-scope':state.orderScope=el.value;generateOrder();renderOrder();break;}save();});
 app.addEventListener('submit',evt=>{
   if(!evt.target.matches('[data-quiz-short]'))return;
   evt.preventDefault();
