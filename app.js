@@ -135,12 +135,13 @@ function teacherQuestions(){
   });
   return [...evidence,...generated].slice(0,100);
 }
-const teacherBank=teacherQuestions();
+const previousTeacherBank=teacherQuestions();
+const teacherBank=[...DATA.teacherPaper,...authoredQuestions.filter(q=>q.material)];
 const sourceQuestionIds=new Set(authoredQuestions.map(q=>q.id));
 const allQuestions=[...authoredQuestions,...questionsDynamic,...shortQuestions,...contextQuestions,...teacherBank.filter(q=>!sourceQuestionIds.has(q.id))];
 const difficultyLabel=['','쉬움','보통','어려움','최상위'];
 const answerText=q=>q.format==='short'?q.answer+'년':q.options[q.answer];
-const questionMap=Object.fromEntries(allQuestions.map(q=>[q.id,q]));
+const questionMap=Object.fromEntries([...previousTeacherBank,...allQuestions].map(q=>[q.id,q]));
 const dayRanges={1:[[76,95]],2:[[96,109]],3:[[110,125]],4:[[126,133],[161,163]]};
 function inDay(pages,day){
   if(day===5)return true;
@@ -317,7 +318,7 @@ function finalPaper(pool,count){
 }
 function setQuizScope(scope){
   state.quizSetupScope=scope;
-  if(scope!=='teacher'&&state.quizLength===100)state.quizLength=25;
+  if(scope!=='teacher'&&state.quizLength>=100)state.quizLength=25;
   if(scope==='final'||scope==='teacher'){
     state.quizLength=25;
     state.quizDifficulty='all';
@@ -325,8 +326,43 @@ function setQuizScope(scope){
   }
   renderQuiz();
 }
-function selectQuestionPool(){let pool=state.quizSetupScope==='teacher'?[...teacherBank]:allQuestions.filter(q=>{const scope=state.quizSetupScope;if(scope==='all'||scope==='adaptive')return true;if(scope==='final')return q.schoolStyle===true;if(scope==='day')return isDayQuestion(q,activeDay());if(scope==='wrong')return wrongIds().includes(q.id);return q.unit===scope;});if(state.quizDifficulty!=='all')pool=pool.filter(q=>q.difficulty===Number(state.quizDifficulty));if(state.quizKind!=='all')pool=pool.filter(q=>q.kind===state.quizKind);return pool;}
-function startQuiz(){const pool=selectQuestionPool();if(!pool.length){toast('선택한 조건에 맞는 문제가 없어.');return;}const count=Math.min(Number(state.quizLength),pool.length);const select=state.quizSetupScope==='final'?finalPaper:['day','adaptive','teacher'].includes(state.quizSetupScope)?practiceSample:sample;
+function teacherPaper(pool,count){
+  const linked=pool.filter(q=>q.part);
+  if(linked.length&&count>=2){
+    const families=practiceSample(linked.filter(q=>q.part===1),linked.length);
+    const single=pool.filter(q=>!q.part);
+    const pairsNeeded=Math.max(1,Math.ceil((count-single.length)/2));
+    const pairs=families.slice(0,Math.min(pairsNeeded,Math.floor(count/2)));
+    const chosen=pairs.flatMap(first=>[first,linked.find(q=>q.family===first.family&&q.part===2)]);
+    const remaining=count-chosen.length;
+    const others=teacherPaper(single,Math.min(single.length,remaining));
+    if(others.length<remaining)others.push(...practiceSample(linked.filter(q=>!chosen.includes(q)),remaining-others.length));
+    const place=Math.floor(Math.random()*(others.length+1));
+    return [...others.slice(0,place),...chosen,...others.slice(place)];
+  }
+  const ranked=practiceSample(pool,pool.length);
+  const selected=[];
+  const usedFamilies=new Set();
+  const kindCounts=new Map();
+  while(selected.length<count){
+    const minKind=q=>(kindCounts.get(q.kind)||0)/({'복합 보기':4,'시기 추론':2,'자료 배열':2}[q.kind]||1);
+    const fresh=ranked.filter(q=>!usedFamilies.has(q.family||q.id));
+    const candidates=fresh.length?fresh:ranked;
+    if(!fresh.length)usedFamilies.clear();
+    const next=candidates.reduce((best,q)=>minKind(q)<minKind(best)?q:best);
+    selected.push(next);
+    usedFamilies.add(next.family||next.id);
+    kindCounts.set(next.kind,(kindCounts.get(next.kind)||0)+1);
+    ranked.splice(ranked.indexOf(next),1);
+  }
+  return shuffle(selected);
+}
+function selectQuestionPool(){let pool=state.quizSetupScope==='teacher'?[...teacherBank]:state.quizSetupScope==='wrong'?wrongIds().map(id=>questionMap[id]).filter(Boolean):allQuestions.filter(q=>{const scope=state.quizSetupScope;if(scope==='all'||scope==='adaptive')return true;if(scope==='final')return q.schoolStyle===true;if(scope==='day')return isDayQuestion(q,activeDay());if(scope==='wrong')return wrongIds().includes(q.id);return q.unit===scope;});if(state.quizDifficulty!=='all')pool=pool.filter(q=>q.difficulty===Number(state.quizDifficulty));if(state.quizKind!=='all')pool=pool.filter(q=>q.kind===state.quizKind);return pool;}
+function startQuiz(){const pool=selectQuestionPool();if(!pool.length){toast('선택한 조건에 맞는 문제가 없어.');return;}const count=Math.min(Number(state.quizLength),pool.length);if(state.quizSetupScope==='teacher'){
+    beginQuiz(teacherPaper(pool,count).map(q=>q.id));
+    return;
+  }
+  const select=state.quizSetupScope==='final'?finalPaper:['day','adaptive','teacher'].includes(state.quizSetupScope)?practiceSample:sample;
   const context=pool.filter(q=>q.kind!=='연표'&&q.kind!=='연도 입력'&&q.format!=='ox');
   const contextFirst=state.quizKind==='all'&&(state.quizDifficulty!=='all'||['adaptive','teacher'].includes(state.quizSetupScope));
   const preferred=contextFirst?Math.min(context.length,Math.ceil(count*0.7)):0;
@@ -354,10 +390,27 @@ function submitAnswer(choice){
   renderQuiz();
 }
 function nextQuiz(){const qstate=state.quiz;if(!qstate||qstate.chosen===null)return;if(qstate.at+1>=qstate.items.length){qstate.finished=true;const summary={date:todayISO(),score:qstate.correct,total:qstate.items.length,seconds:Math.round((Date.now()-qstate.startedAt)/1000),questions:qstate.answers};db.sessions.unshift(summary);db.sessions=db.sessions.slice(0,50);save();}else{qstate.at++;qstate.chosen=null;state.quizDraft='';}renderQuiz();window.scrollTo(0,0);}
+function paperMaterial(q){
+  if(!q.material)return '';
+  if(!q.family)return `<div class="study-material" aria-label="문제 자료">${esc(q.material)}</div>`;
+  const [source,judgments]=q.material.split('\n\n〈보기〉\n');
+  const [heading,...lines]=source.split('\n');
+  const title=q.part?`공통 자료 · ${q.part}/2　${heading}`:heading;
+  const rows=lines.map(line=>{
+    if(q.family==='case_civic'){
+      const [period,value]=line.split('　');
+      const width=100*Number(value.replaceAll(',',''))/5902;
+      return `<div class="paper-bar"><span>${esc(period)}</span><i aria-hidden="true" style="width:${width}%"></i><b>${esc(value)}</b></div>`;
+    }
+    return `<p>${esc(line)}</p>`;
+  }).join('');
+  const notes=judgments?`<aside class="paper-judgments"><b>〈보기〉</b>${judgments.split('\n').map(line=>`<p>${esc(line)}</p>`).join('')}</aside>`:'';
+  return `<section class="study-material paper-source" aria-label="문제 자료"><strong>${esc(title)}</strong>${rows}${notes}</section>`;
+}
 function renderQuiz(){const s=state.quiz;
 if(!s){let pool=selectQuestionPool();app.innerHTML=pageHead('EXAM SIMULATOR','실전 문제풀이','객관식, OX, 연도 입력을 섞어 풀고, 해설에서 교과서 쪽수를 확인해 봐.')+`<div class="quiz-stage"><div class="panel"><div class="eyebrow">STEP 01 / 범위 선택</div><h2 class="section-title">어디부터 도전할까?</h2><div class="preset-grid"><button class="preset-card ${state.quizSetupScope==='day'?'selected':''}" data-action="quiz-scope" data-scope="day">${ic('clock',20)}<b>오늘의 집중 훈련</b><span>DAY ${activeDay()} · ${dayTitle[activeDay()]}</span></button><button class="preset-card ${state.quizSetupScope==='all'?'selected':''}" data-action="quiz-scope" data-scope="all">${ic('trophy',20)}<b>전 범위 모의고사</b><span>한국사 + 개헌 + 부록 연표</span></button><button class="preset-card ${state.quizSetupScope==='wrong'?'selected':''}" data-action="quiz-scope" data-scope="wrong">${ic('refresh',20)}<b>오답만 재도전</b><span>지금까지 틀린 문제만 다시</span></button>
 <button class="preset-card ${state.quizSetupScope==='adaptive'?'selected':''}" data-action="quiz-scope" data-scope="adaptive">${ic('filter',20)}<b>맞춤 출제</b><span>최근 오답과 약한 개념 중심</span></button>
-<button class="preset-card ${state.quizSetupScope==='final'?'selected':''}" data-action="quiz-scope" data-scope="final">${ic('book',20)}<b>미사고 1학년 기말 연습</b><span>교과서 범위 · 기본 25문항</span></button><button class="preset-card ${state.quizSetupScope==='teacher'?'selected':''}" data-action="quiz-scope" data-scope="teacher">${ic('book',20)}<b>강민석 유형 문제들</b><span>100문항 · 자료 추론·정책 비교·복합 보기</span></button></div><div class="form-row"><div class="field"><label>교과서 단원 또는 범위</label><select class="select" data-change="quiz-scope"><option value="day">DAY ${activeDay()} 집중 범위</option><option value="all">전 범위</option><option value="wrong">나의 오답</option><option value="adaptive">맞춤 출제</option><option value="final">미사고 1학년 기말 연습</option><option value="teacher">강민석 유형 문제들</option>${DATA.units.map(u=>`<option value="${u.id}">${u.short} (p.${u.pages})</option>`).join('')}</select></div><div class="field"><label>난이도</label><select class="select" data-change="quiz-difficulty"><option value="all">전체 난이도</option>${difficultyLabel.slice(1).map((label,i)=>`<option value="${i+1}">${label}</option>`).join('')}</select></div><div class="field"><label>문제 유형</label><select class="select" data-change="quiz-kind"><option value="all">전체 유형</option>${uniq(allQuestions.map(q=>q.kind)).map(k=>`<option value="${k}">${k} 문제</option>`).join('')}</select></div><div class="field"><label>문항 수</label><select class="select" data-change="quiz-length"><option value="10">10문항 · 빠른 점검</option><option value="25">25문항 · 지필 연습</option><option value="20">20문항 · 단원 테스트</option><option value="30">30문항 · 실전 모의고사</option>${state.quizSetupScope==='teacher'?'<option value="100">100문항 · 전체 유형</option>':''}</select></div></div><div class="banner-info">${state.quizSetupScope==='adaptive'?'<p class="unit-note">최근 오답이 쌓인 단원·개념과 모름으로 평가한 카드를 우선 반영해. 방금 본 문항의 출제 가능성은 낮춰 줘.</p>':''}${state.quizSetupScope==='final'?'<p class="unit-note">1학기 시험의 출제 형식을 참고한 한국사2 연습이야. 범위는 앱에 지정된 교과서 쪽수를 기준으로 해.</p>':''}현재 설정으로 <b>${pool.length}문항</b> 출제 가능 · 오답과 해설은 자동 저장 · 연표형 문제는 교과서 연표 사건에서 생성해.</div><button class="btn primary full" data-action="quiz-start">시험 시작하기 ${ic('arrow',16)}</button></div></div>`;
+<button class="preset-card ${state.quizSetupScope==='final'?'selected':''}" data-action="quiz-scope" data-scope="final">${ic('book',20)}<b>미사고 1학년 기말 연습</b><span>교과서 범위 · 기본 25문항</span></button><button class="preset-card ${state.quizSetupScope==='teacher'?'selected':''}" data-action="quiz-scope" data-scope="teacher">${ic('book',20)}<b>강민석 유형 문제들</b><span>${teacherBank.length}문항 · 학교 지필 형식 · 기본 25문항</span></button></div><div class="form-row"><div class="field"><label>교과서 단원 또는 범위</label><select class="select" data-change="quiz-scope"><option value="day">DAY ${activeDay()} 집중 범위</option><option value="all">전 범위</option><option value="wrong">나의 오답</option><option value="adaptive">맞춤 출제</option><option value="final">미사고 1학년 기말 연습</option><option value="teacher">강민석 유형 문제들</option>${DATA.units.map(u=>`<option value="${u.id}">${u.short} (p.${u.pages})</option>`).join('')}</select></div><div class="field"><label>난이도</label><select class="select" data-change="quiz-difficulty"><option value="all">전체 난이도</option>${difficultyLabel.slice(1).map((label,i)=>state.quizSetupScope==='teacher'&&i<2?'':`<option value="${i+1}">${label}</option>`).join('')}</select></div><div class="field"><label>문제 유형</label><select class="select" data-change="quiz-kind"><option value="all">전체 유형</option>${uniq((state.quizSetupScope==='teacher'?teacherBank:allQuestions).map(q=>q.kind)).map(k=>`<option value="${k}">${k} 문제</option>`).join('')}</select></div><div class="field"><label>문항 수</label><select class="select" data-change="quiz-length"><option value="10">10문항 · 빠른 점검</option><option value="25">25문항 · 지필 연습</option><option value="20">20문항 · 단원 테스트</option><option value="30">30문항 · 실전 모의고사</option>${state.quizSetupScope==='teacher'?`<option value="100">100문항</option><option value="${teacherBank.length}">전체 ${teacherBank.length}문항</option>`:''}</select></div></div><div class="banner-info">${state.quizSetupScope==='adaptive'?'<p class="unit-note">최근 오답이 쌓인 단원·개념과 모름으로 평가한 카드를 우선 반영해. 방금 본 문항의 출제 가능성은 낮춰 줘.</p>':''}${state.quizSetupScope==='final'?'<p class="unit-note">1학기 시험의 출제 형식을 참고한 한국사2 연습이야. 범위는 앱에 지정된 교과서 쪽수를 기준으로 해.</p>':''}${state.quizSetupScope==='teacher'?'<p>학교 지필 형식을 참고한 창작 연습문제야. 25문항을 고르면 자료, 보기 판단, 시기 추론을 섞어 출제해.</p>':''}현재 설정으로 <b>${pool.length}문항</b> 출제 가능 · 오답과 해설은 자동 저장</div><button class="btn primary full" data-action="quiz-start">시험 시작하기 ${ic('arrow',16)}</button></div></div>`;
 app.querySelector('[data-change="quiz-scope"]').value=state.quizSetupScope;app.querySelector('[data-change="quiz-difficulty"]').value=state.quizDifficulty;app.querySelector('[data-change="quiz-kind"]').value=state.quizKind;app.querySelector('[data-change="quiz-length"]').value=String(state.quizLength);return;}
 if(s.finished){const pct=Math.round(s.correct/s.items.length*100);const misses=s.answers.filter(a=>!a.correct).map(a=>({...a,q:questionMap[a.id]}));app.innerHTML=pageHead('SESSION COMPLETE','시험 결과','수고했어. 틀린 문항만 다시 보면 점수가 빠르게 올라가.')+`<div class="quiz-stage"><div class="panel"><div class="result-score"><div class="score-ring" style="--score:${pct}%"><strong>${pct}점</strong></div><h2 style="font-size:25px;margin:0">${pct>=90?'완벽에 가까워!':pct>=70?'실력이 쌓이고 있어!':'오답을 연결해 보자!'}</h2><div class="result-label">${s.items.length}문항 중 <b style="color:var(--mint)">${s.correct}문항 정답</b> · ${s.items.length-s.correct}문항 오답</div></div>${accuracyBar(s.correct,s.items.length)}<div class="row-between mt-18"><button class="btn secondary" data-action="quiz-new">다른 시험 보기</button><button class="btn primary" data-action="quiz-retry">${ic('refresh',14)} ${misses.length?'오답 재시험':'다시 풀기'}</button></div>${misses.length?`<hr class="separator"><h3 class="section-title">이번에 틀린 문제 (${misses.length})</h3>${misses.map(a=>`<div class="review-row"><b>${esc(a.q.prompt)}</b><p>정답: <span style="color:var(--mint)">${esc(answerText(a.q))}</span> · 교과서 p.${esc(a.q.page)}</p><p>${esc(a.q.explain)}</p></div>`).join('')}`:''}</div></div>`;return;}
 const q=questionMap[s.items[s.at]],reveal=s.chosen!==null;
@@ -367,9 +420,9 @@ const choices=short?`<form data-quiz-short class="filter-bar"><label for="quizYe
   `<div class="quiz-options">${q.options.map((text,i)=>`<button class="quiz-option ${reveal?(i===q.answer?'correct':i===s.chosen?'incorrect':''):''}" data-action="answer" data-index="${i}" ${reveal?'disabled':''}><span class="number">${i+1}</span><span>${esc(text)}</span></button>`).join('')}</div>`;
 app.innerHTML=pageHead('FOCUSED PRACTICE','실전 문제풀이',`${s.items.length}문항 · 답을 제출하면 해설을 볼 수 있어.`,'<button class="btn small ghost" data-action="quiz-exit">시험 중단</button>')+
   `<div class="quiz-stage"><div class="panel">
-    <div class="quiz-meta"><span><span class="pill">${esc(q.kind)}</span> <span class="pill">${difficultyLabel[q.difficulty]}</span> <span class="pill">교과서 p.${esc(q.page)}</span></span><b class="mono">${s.at+1} / ${s.items.length}</b></div>
+    <div class="quiz-meta"><span><span class="pill">${esc(q.kind)}</span> <span class="pill">${difficultyLabel[q.difficulty]}</span> ${state.quizSetupScope==='teacher'?'':`<span class="pill">교과서 p.${esc(q.page)}</span>`}</span><b class="mono">${s.at+1} / ${s.items.length}</b></div>
     ${accuracyBar(s.at,s.items.length)}
-    <h2 class="quiz-question">${esc(q.prompt)}</h2>${q.material?`<div class="study-material" aria-label="문제 자료">${esc(q.material)}</div>`:''}${choices}
+    <h2 class="quiz-question">${esc(q.prompt)}</h2>${paperMaterial(q)}${choices}
     ${reveal?`<div class="explain-box ${correct?'':'bad'}"><strong>${correct?'✓ 정답이야!':'✗ 다시 확인해 보자.'}</strong><p><b>정답 · ${esc(answerText(q))}</b></p><p>${esc(q.explain)}</p><span class="small muted">비상교육 한국사2 교과서 p.${esc(q.page)}</span></div>
     <div class="answer-area"><button class="btn primary" data-action="quiz-next">${s.at+1===s.items.length?'결과 확인':'다음 문제'}</button></div>`:''}
   </div></div>`;}
