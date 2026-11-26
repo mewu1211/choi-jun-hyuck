@@ -189,8 +189,26 @@ function renderGuide(){
     '<button class="btn small secondary" data-action="nav" data-tab="timeline">연표로</button>')+
     ['정부','인물'].map(group=>`<section class="study-guide-group"><h2>${group}별 핵심 정리</h2><div class="study-guide-grid">${cards(group)}</div></section>`).join('');
 }
-function filteredTimeline(){let events=DATA.events.filter(e=>{if(state.timelineDay!=='all'&&!isDayCard(e,Number(state.timelineDay)))return false;if(state.timelineUnit!=='all'&&e.unit!==state.timelineUnit)return false;if(state.timelineUnit==='all'&&e.world&&!state.includeWorld)return false;if(state.timelineUnit==='all'&&!e.world&&e.year<1945&&!state.includeOld)return false;if(state.timelineType!=='all'&&e.cat!==state.timelineType)return false;const q=state.query.trim().toLowerCase();if(q&&!(`${e.title} ${e.detail} ${e.hint} ${e.year}`).toLowerCase().includes(q))return false;return true;});return events.sort((a,b)=>a.sort-b.sort||a.id.localeCompare(b.id));}
-function renderTimeline(resultsOnly=false){const items=filteredTimeline();let marker=null;const cards=items.map(e=>{const decade=Math.floor(e.year/10)*10;let m='';if(marker!==decade){marker=decade;m=`<div class="timeline-year-mark">${decade}s <span style="font-size:11px;font-weight:600;color:var(--faint)">/ 시간의 흐름</span></div>`;}return m+`<div class="timeline-entry kind-${e.cat}"><details class="timeline-card"><summary><span class="timeline-date mono">${esc(e.date)}</span><span class="timeline-main">${esc(e.title)}<small>${categories[e.cat]} · 교과서 p.${esc(e.pages)}</small></span><span class="timeline-chevron">⌄</span></summary><div class="timeline-body">${esc(e.detail)}<br><span class="timeline-memory">🧠 ${esc(e.hint)}</span><div class="unit-note">연결 범위: ${esc(unitForCard(e))}</div></div></details></div>`;}).join('');
+function sourceTable(rows){
+  if(!rows)return '';
+  const [labels,...values]=rows;
+  return `<table class="source-table"><thead><tr>${labels.map(label=>`<th scope="col">${esc(label)}</th>`).join('')}</tr></thead>
+    <tbody>${values.map(([label,...cells])=>`<tr><th scope="row">${esc(label)}</th>${cells.map(value=>`<td>${esc(value)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+function timelineReadings(event){
+  return (event.readings||[]).map(reading=>{
+    const trail=reading.related.map(id=>{
+      const item=eventById[id];
+      return `<li><time>${esc(item.date)}</time> ${id===event.id?`<strong>${esc(item.title)}</strong>`:esc(item.title)}</li>`;
+    }).join('');
+    return `<section class="event-reading"><h3>${esc(reading.title)}</h3>
+      <p class="reading-ref">교과서 ${esc(reading.pages)}쪽${reading.slides?' · '+esc(reading.slides):''}</p>
+      <p>${esc(reading.body)}</p>${sourceTable(reading.table)}<p><b>읽는 단서</b> ${esc(reading.note)}</p>
+      <h4>함께 볼 사건</h4><ul>${trail}</ul></section>`;
+  }).join('');
+}
+function filteredTimeline(){let events=DATA.events.filter(e=>{if(state.timelineDay!=='all'&&!isDayCard(e,Number(state.timelineDay)))return false;if(state.timelineUnit!=='all'&&e.unit!==state.timelineUnit)return false;if(state.timelineUnit==='all'&&e.world&&!state.includeWorld)return false;if(state.timelineUnit==='all'&&!e.world&&e.year<1945&&!state.includeOld)return false;if(state.timelineType!=='all'&&e.cat!==state.timelineType)return false;const q=state.query.trim().toLowerCase();if(q&&!(`${e.title} ${e.detail} ${e.hint} ${e.year} ${(e.readings||[]).map(r=>[r.title,r.body,r.note,r.slides].join(' ')).join(' ')}`).toLowerCase().includes(q))return false;return true;});return events.sort((a,b)=>a.sort-b.sort||a.id.localeCompare(b.id));}
+function renderTimeline(resultsOnly=false){const items=filteredTimeline();let marker=null;const cards=items.map(e=>{const decade=Math.floor(e.year/10)*10;let m='';if(marker!==decade){marker=decade;m=`<div class="timeline-year-mark">${decade}s <span style="font-size:11px;font-weight:600;color:var(--faint)">/ 시간의 흐름</span></div>`;}return m+`<div class="timeline-entry kind-${e.cat}"><details class="timeline-card"><summary><span class="timeline-date mono">${esc(e.date)}</span><span class="timeline-main">${esc(e.title)}<small>${categories[e.cat]} · 교과서 p.${esc(e.pages)}${e.readings?' · 자료 해설':''}</small></span><span class="timeline-chevron">⌄</span></summary><div class="timeline-body">${esc(e.detail)}<br><span class="timeline-memory">🧠 ${esc(e.hint)}</span><div class="unit-note">연결 범위: ${esc(unitForCard(e))}</div>${timelineReadings(e)}</div></details></div>`;}).join('');
 const results=`<div class="row-between"><span class="count-note">총 <b style="color:var(--ink)">${fmt(items.length)}</b>건 · 날짜와 사건을 눌러 자세히 보기</span><span class="count-note">색상은 주제별 분류</span></div><div class="legend">${Object.entries(categories).map(([k,v])=>`<span class="tag kind-${k}"><span class="dot"></span>${v}</span>`).join('')}</div>${items.length?`<div class="timeline-list">${cards}</div>`:'<div class="empty"><h3>표시할 사건이 없어</h3>검색어나 필터를 바꿔 줘.</div>'}`;
 if(resultsOnly){app.querySelector('#timelineResults').innerHTML=results;return;}
 app.innerHTML=pageHead('CHRONOLOGY / SOURCE-BASED','연표 탐색','시험에 나오는 사건을 시간순으로 살펴보고, 사건을 눌러 원인과 기억법을 확인해.',`<button class="btn secondary small" data-action="nav" data-tab="order">${ic('order',16)} 순서 훈련</button><button class="btn secondary small" data-action="nav" data-tab="guide">정부·인물 정리</button>`)+`<div class="panel"><div class="day-row" aria-label="연표 학습일">${['all',1,2,3,4,5].map(day=>`<button class="day-pill ${String(day)===state.timelineDay?'active':''}" aria-pressed="${String(day)===state.timelineDay}" data-action="timeline-day" data-day="${day}">${day==='all'?'전체':'DAY '+day}</button>`).join('')}</div><div class="filter-bar"><select class="select" data-change="timeline-unit" aria-label="단원 선택">${unitOptions()}</select><select class="select" data-change="timeline-type" aria-label="사건 종류"><option value="all">모든 사건 종류</option>${Object.entries(categories).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><input class="search" data-input="timeline-search" placeholder="사건·연도·키워드 검색" value="${esc(state.query)}" aria-label="연표 검색"></div><div class="filter-bar"><label class="check-label"><input type="checkbox" data-change="timeline-world" ${state.includeWorld?'checked':''}> 부록 세계사 포함</label><label class="check-label"><input type="checkbox" data-change="timeline-old" ${state.includeOld?'checked':''}> 1945년 이전 한국사 포함</label></div><div id="timelineResults">${results}</div></div>`;
@@ -345,7 +363,7 @@ function teacherPaper(pool,count){
   const usedFamilies=new Set();
   const kindCounts=new Map();
   while(selected.length<count){
-    const minKind=q=>(kindCounts.get(q.kind)||0)/({'복합 보기':4,'시기 추론':2,'자료 배열':2}[q.kind]||1);
+    const minKind=q=>(kindCounts.get(q.kind)||0)/({'교과서 자료 심화':6,'복합 보기':4,'시기 추론':2,'자료 배열':2}[q.kind]||1);
     const fresh=ranked.filter(q=>!usedFamilies.has(q.family||q.id));
     const candidates=fresh.length?fresh:ranked;
     if(!fresh.length)usedFamilies.clear();
@@ -405,7 +423,7 @@ function paperMaterial(q){
     return `<p>${esc(line)}</p>`;
   }).join('');
   const notes=judgments?`<aside class="paper-judgments"><b>〈보기〉</b>${judgments.split('\n').map(line=>`<p>${esc(line)}</p>`).join('')}</aside>`:'';
-  return `<section class="study-material paper-source" aria-label="문제 자료"><strong>${esc(title)}</strong>${rows}${notes}</section>`;
+  return `<section class="study-material paper-source" aria-label="문제 자료"><strong>${esc(title)}</strong>${rows}${sourceTable(q.table)}${notes}</section>`;
 }
 function renderQuiz(){const s=state.quiz;
 if(!s){let pool=selectQuestionPool();app.innerHTML=pageHead('EXAM SIMULATOR','실전 문제풀이','객관식, OX, 연도 입력을 섞어 풀고, 해설에서 교과서 쪽수를 확인해 봐.')+`<div class="quiz-stage"><div class="panel"><div class="eyebrow">STEP 01 / 범위 선택</div><h2 class="section-title">어디부터 도전할까?</h2><div class="preset-grid"><button class="preset-card ${state.quizSetupScope==='day'?'selected':''}" data-action="quiz-scope" data-scope="day">${ic('clock',20)}<b>오늘의 집중 훈련</b><span>DAY ${activeDay()} · ${dayTitle[activeDay()]}</span></button><button class="preset-card ${state.quizSetupScope==='all'?'selected':''}" data-action="quiz-scope" data-scope="all">${ic('trophy',20)}<b>전 범위 모의고사</b><span>한국사 + 개헌 + 부록 연표</span></button><button class="preset-card ${state.quizSetupScope==='wrong'?'selected':''}" data-action="quiz-scope" data-scope="wrong">${ic('refresh',20)}<b>오답만 재도전</b><span>지금까지 틀린 문제만 다시</span></button>
@@ -546,6 +564,7 @@ function restoreSession(){
   if(!Array.isArray(state.flashRated))state.flashRated=[];
   if(!Array.isArray(state.orderList))state.orderList=[];
   if(!Array.isArray(db.cardRatings))db.cardRatings=[];
+  if(state.quizSetupScope==='teacher'&&state.quizLength>100)state.quizLength=teacherBank.length;
   if(!Array.isArray(db.orderAttempts))db.orderAttempts=[];
   if(![...tabs,guideTab].some(tab=>tab.id===state.tab))state.tab='home';
   if(!state.flashQueue.every(id=>eventById[id])||state.flashAt>=state.flashQueue.length)resetFlash(false);

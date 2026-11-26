@@ -1,5 +1,5 @@
 // Offline-only cache for a deployed, same-origin static installation.
-const CACHE='history-study-v2.2';
+const CACHE='history-study-v2.3';
 const ASSETS=['./','./index.html','./styles.css','./app.js','./data.js','./manifest.webmanifest','./app-192.png','./app-512.png'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('history-study-')&&k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
