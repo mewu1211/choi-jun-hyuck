@@ -196,19 +196,31 @@ function sourceTable(rows){
     <tbody>${values.map(([label,...cells])=>`<tr><th scope="row">${esc(label)}</th>${cells.map(value=>`<td>${esc(value)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 }
 function timelineReadings(event){
-  return (event.readings||[]).map(reading=>{
-    const trail=reading.related.map(id=>{
-      const item=eventById[id];
-      return `<li><time>${esc(item.date)}</time> ${id===event.id?`<strong>${esc(item.title)}</strong>`:esc(item.title)}</li>`;
-    }).join('');
-    return `<section class="event-reading"><h3>${esc(reading.title)}</h3>
-      <p class="reading-ref">교과서 ${esc(reading.pages)}쪽${reading.slides?' · '+esc(reading.slides):''}</p>
-      <p>${esc(reading.body)}</p>${sourceTable(reading.table)}<p><b>읽는 단서</b> ${esc(reading.note)}</p>
-      <h4>함께 볼 사건</h4><ul>${trail}</ul></section>`;
-  }).join('');
+  return (event.readings||[]).map((reading,index)=>
+    `<button class="btn secondary small reading-link" data-action="open-reading" data-event="${esc(event.id)}" data-index="${index}">비교 자료 보기 · ${esc(reading.title)}</button>`
+  ).join('');
 }
-function filteredTimeline(){let events=DATA.events.filter(e=>{if(state.timelineDay!=='all'&&!isDayCard(e,Number(state.timelineDay)))return false;if(state.timelineUnit!=='all'&&e.unit!==state.timelineUnit)return false;if(state.timelineUnit==='all'&&e.world&&!state.includeWorld)return false;if(state.timelineUnit==='all'&&!e.world&&e.year<1945&&!state.includeOld)return false;if(state.timelineType!=='all'&&e.cat!==state.timelineType)return false;const q=state.query.trim().toLowerCase();if(q&&!(`${e.title} ${e.detail} ${e.explanation||''} ${e.hint} ${e.year} ${(e.readings||[]).map(r=>[r.title,r.body,r.note,r.slides].join(' ')).join(' ')}`).toLowerCase().includes(q))return false;return true;});return events.sort((a,b)=>a.sort-b.sort||a.id.localeCompare(b.id));}
-function renderTimeline(resultsOnly=false){const items=filteredTimeline();let marker=null;const cards=items.map(e=>{const decade=Math.floor(e.year/10)*10;let m='';if(marker!==decade){marker=decade;m=`<div class="timeline-year-mark">${decade}s <span style="font-size:11px;font-weight:600;color:var(--faint)">/ 시간의 흐름</span></div>`;}return m+`<div class="timeline-entry kind-${e.cat}"><details class="timeline-card"><summary><span class="timeline-date mono">${esc(e.date)}</span><span class="timeline-main">${esc(e.title)}<small>${categories[e.cat]} · 교과서 p.${esc(e.pages)}${e.readings?' · 자료 해설':''}</small></span><span class="detail-switch"><span class="when-closed">자세히 보기</span><span class="when-open">접기</span></span></summary><div class="timeline-body event-detail"><h3>사건 해설</h3><p>${esc(e.explanation||e.detail)}</p><span class="timeline-memory">🧠 ${esc(e.hint)}</span><div class="unit-note">연결 범위: ${esc(unitForCard(e))}</div>${timelineReadings(e)}</div></details></div>`;}).join('');
+function openTimelineReading(el){
+  const event=eventById[el.dataset.event];
+  const reading=event.readings[Number(el.dataset.index)];
+  const dialog=document.createElement('dialog');
+  dialog.className='event-reading reading-dialog';
+  dialog.setAttribute('aria-labelledby','reading-heading');
+  const related=reading.related.map(id=>{
+    const item=eventById[id];
+    return `<li><time>${esc(item.date)}</time> ${esc(item.title)}</li>`;
+  }).join('');
+  dialog.innerHTML=`<form method="dialog"><button class="btn secondary small" autofocus>닫기</button></form>
+    <h3 id="reading-heading">${esc(reading.title)}</h3>
+    <p class="reading-ref">교과서 ${esc(reading.pages)}쪽${reading.slides?' · '+esc(reading.slides):''}</p>
+    <p>${esc(reading.body)}</p>${sourceTable(reading.table)}<p><b>읽는 단서</b> ${esc(reading.note)}</p>
+    <h4>함께 볼 사건</h4><ul>${related}</ul>`;
+  document.body.append(dialog);
+  dialog.addEventListener('close',()=>{dialog.remove();el.focus();},{once:true});
+  dialog.showModal();
+}
+function filteredTimeline(){let events=DATA.events.filter(e=>{if(state.timelineDay!=='all'&&!isDayCard(e,Number(state.timelineDay)))return false;if(state.timelineUnit!=='all'&&e.unit!==state.timelineUnit)return false;if(state.timelineUnit==='all'&&e.world&&!state.includeWorld)return false;if(state.timelineUnit==='all'&&!e.world&&e.year<1945&&!state.includeOld)return false;if(state.timelineType!=='all'&&e.cat!==state.timelineType)return false;const q=state.query.trim().toLowerCase();if(q&&!(`${e.title} ${e.detail} ${e.explanation||''} ${e.hint} ${e.year}`).toLowerCase().includes(q))return false;return true;});return events.sort((a,b)=>a.sort-b.sort||a.id.localeCompare(b.id));}
+function renderTimeline(resultsOnly=false){const items=filteredTimeline();let marker=null;const cards=items.map(e=>{const decade=Math.floor(e.year/10)*10;let m='';if(marker!==decade){marker=decade;m=`<div class="timeline-year-mark">${decade}s <span style="font-size:11px;font-weight:600;color:var(--faint)">/ 시간의 흐름</span></div>`;}return m+`<div class="timeline-entry kind-${e.cat}"><details class="timeline-card"><summary><span class="timeline-date mono">${esc(e.date)}</span><span class="timeline-main">${esc(e.title)}<small>${categories[e.cat]} · 교과서 p.${esc(e.pages)}${e.readings?' · 비교 자료':''}</small></span><span class="detail-switch"><span class="when-closed">자세히 보기</span><span class="when-open">접기</span></span></summary><div class="timeline-body event-detail"><h3>사건 해설</h3><p>${esc(e.explanation)}</p><span class="timeline-memory">🧠 ${esc(e.hint)}</span><div class="unit-note">연결 범위: ${esc(unitForCard(e))}</div>${timelineReadings(e)}</div></details></div>`;}).join('');
 const results=`<div class="row-between"><span class="count-note">총 <b style="color:var(--ink)">${fmt(items.length)}</b>건 · 날짜와 사건을 눌러 자세히 보기</span><span class="count-note">색상은 주제별 분류</span></div><div class="legend">${Object.entries(categories).map(([k,v])=>`<span class="tag kind-${k}"><span class="dot"></span>${v}</span>`).join('')}</div>${items.length?`<div class="timeline-list">${cards}</div>`:'<div class="empty"><h3>표시할 사건이 없어</h3>검색어나 필터를 바꿔 줘.</div>'}`;
 if(resultsOnly){app.querySelector('#timelineResults').innerHTML=results;return;}
 app.innerHTML=pageHead('CHRONOLOGY / SOURCE-BASED','연표 탐색','시험에 나오는 사건을 시간순으로 살펴보고, 사건을 눌러 원인과 기억법을 확인해.',`<button class="btn secondary small" data-action="nav" data-tab="order">${ic('order',16)} 순서 훈련</button><button class="btn secondary small" data-action="nav" data-tab="guide">정부·인물 정리</button>`)+`<div class="panel"><div class="day-row" aria-label="연표 학습일">${['all',1,2,3,4,5].map(day=>`<button class="day-pill ${String(day)===state.timelineDay?'active':''}" aria-pressed="${String(day)===state.timelineDay}" data-action="timeline-day" data-day="${day}">${day==='all'?'전체':'DAY '+day}</button>`).join('')}</div><div class="filter-bar"><select class="select" data-change="timeline-unit" aria-label="단원 선택">${unitOptions()}</select><select class="select" data-change="timeline-type" aria-label="사건 종류"><option value="all">모든 사건 종류</option>${Object.entries(categories).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select><input class="search" data-input="timeline-search" placeholder="사건·연도·키워드 검색" value="${esc(state.query)}" aria-label="연표 검색"></div><div class="filter-bar"><label class="check-label"><input type="checkbox" data-change="timeline-world" ${state.includeWorld?'checked':''}> 부록 세계사 포함</label><label class="check-label"><input type="checkbox" data-change="timeline-old" ${state.includeOld?'checked':''}> 1945년 이전 한국사 포함</label></div><div id="timelineResults">${results}</div></div>`;
@@ -572,7 +584,7 @@ function restoreSession(){
   if(state.quiz&&(!Array.isArray(state.quiz.items)||!state.quiz.items[state.quiz.at]||!state.quiz.items.every(id=>questionMap[id])))state.quiz=null;
 }
 function importData(file){if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const o=JSON.parse(reader.result);if(!o||!o.progress||!Array.isArray(o.progress.answers)||(!o.progress.srs||typeof o.progress.srs!=='object'||Array.isArray(o.progress.srs)))throw Error('invalid');if(!window.confirm('현재 기기의 학습 기록을 불러온 기록으로 교체할까?'))return;db={...defaultDB(),...o.progress};restoreSession();save();render();toast('학습 기록을 불러왔어.');}catch(err){toast('올바른 학습 기록 JSON 파일이 아니야.');}};reader.readAsText(file);}
-function handleAction(action,el){switch(action){case 'nav':navigate(el.dataset.tab);break;case 'timeline-day':case 'day':{
+function handleAction(action,el){switch(action){case 'open-reading':openTimelineReading(el);break;case 'nav':navigate(el.dataset.tab);break;case 'timeline-day':case 'day':{
   const selection=el.dataset.day;
   const day=Number(selection);
   state.timelineDay=selection;
